@@ -23,27 +23,32 @@ def calculate_rsi(data, window=14):
 
 def check_rsi():
     ticker = "SOXL"
-    # 최근 5일 15분봉 데이터 다운로드
     df = yf.download(tickers=ticker, period="5d", interval="15m", progress=False)
     
-    if df.empty or len(df) < 15:
+    if df.empty or len(df) < 20:
         print("데이터를 불러오지 못했습니다.")
         return
 
+    # RSI 및 20일(20봉) 이동평균선 계산
     df['RSI'] = calculate_rsi(df)
+    df['MA20'] = df['Close'].rolling(window=20).mean()
     
     latest_price = float(df['Close'].iloc[-1])
     latest_rsi = float(df['RSI'].iloc[-1])
+    latest_ma20 = float(df['MA20'].iloc[-1])
     latest_time = df.index[-1].strftime('%Y-%m-%d %H:%M:%S')
 
-    print(f"[{latest_time}] {ticker} 현재가: ${latest_price:.2f} | 15분봉 RSI: {latest_rsi:.2f}")
+    print(f"[{latest_time}] {ticker} 현재가: ${latest_price:.2f} | RSI: {latest_rsi:.2f} | 20봉이평선: ${latest_ma20:.2f}")
 
-    # RSI가 30 이하일 때 텔레그램 알림 전송
+    # 조건 1: RSI 30 이하 알림
     if latest_rsi <= 30:
-        msg = f"🚨 [SOXL 매수 신호 알림]\n\n시간: {latest_time}\n현재가: ${latest_price:.2f}\nRSI(15분봉): {latest_rsi:.2f}\n\nRSI가 30 이하로 내려갔습니다!"
+        msg = f"🚨 [SOXL RSI 매수 신호]\n시간: {latest_time}\n현재가: ${latest_price:.2f}\nRSI(15분봉): {latest_rsi:.2f}"
         send_telegram(msg)
-    else:
-        print("RSI 30 초과 상태 (알림 미전송)")
+        
+    # 조건 2: 현재가가 20봉 이동평균선 아래로 하락 시 알림
+    if latest_price < latest_ma20:
+        msg = f"📉 [SOXL 이평선 하향 이탈]\n시간: {latest_time}\n현재가: ${latest_price:.2f}\n20봉이평선: ${latest_ma20:.2f}"
+        send_telegram(msg)
 
 if __name__ == "__main__":
     check_rsi()
