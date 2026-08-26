@@ -44,22 +44,25 @@ def check_symbol(ticker, name):
     else:
         df.index = df.index.tz_convert('Asia/Seoul')
 
+    # 현재 봉 (최신 데이터)
     latest_price = float(df['Close'].iloc[-1])
     latest_rsi = float(df['RSI'].iloc[-1])
     latest_ma20 = float(df['MA20'].iloc[-1])
     latest_time = df.index[-1].strftime('%Y-%m-%d %H:%M:%S')
 
+    # 직전 봉 (15분 전 데이터)
+    prev_price = float(df['Close'].iloc[-2])
+    prev_ma20 = float(df['MA20'].iloc[-2])
+
     print(f"[{latest_time} KST] {name}({ticker}) 현재가: ${latest_price:.2f} | RSI: {latest_rsi:.2f} | 20봉이평선: ${latest_ma20:.2f}")
 
-    # 최근 데이터 중에서 RSI가 35 이하였던 구간 감지 및 반등 체크
-    # 최근 10개 봉(2시간 30분) 이내에 RSI 35 이하 진입 내역이 있는지 확인
+    # 조건 1: 최근 10개 봉 이내 RSI 35 이하 진입 후 +4pt 이상 반등 감지
     recent_df = df.tail(10)
     rsi_under_35 = recent_df[recent_df['RSI'] <= 35]
 
     if not rsi_under_35.empty:
         min_rsi = rsi_under_35['RSI'].min() # RSI 35 이하 구간에서의 최저 RSI 값
         
-        # 조건: 현재 RSI가 최저점 대비 4pt 이상 상승했고, 현재 RSI도 여전히 40 이하인 반등 초기 단계
         if latest_rsi >= (min_rsi + 4) and latest_rsi <= 40:
             msg = (f"📈 [{name} RSI 바닥 반등 신호]\n"
                    f"시간: {latest_time} (KST)\n"
@@ -68,9 +71,12 @@ def check_symbol(ticker, name):
                    f"RSI 35 이하 바닥 형성 후 +4pt 이상 반등했습니다!")
             send_telegram(msg)
 
-    # 조건 2: 현재가가 20봉 이동평균선 아래로 하락 시 알림
-    if latest_price < latest_ma20:
-        msg = f"📉 [{name} 이평선 하향 이탈]\n시간: {latest_time} (KST)\n현재가: ${latest_price:.2f}\n20봉이평선: ${latest_ma20:.2f}"
+    # 조건 2: 20봉 이동평균선을 '위에서 아래로 하향 돌파하는 순간'에만 1번 알림
+    if prev_price >= prev_ma20 and latest_price < latest_ma20:
+        msg = (f"📉 [{name} 20이평선 하향 돌파]\n"
+               f"시간: {latest_time} (KST)\n"
+               f"직전가: ${prev_price:.2f} ➔ 현재가: ${latest_price:.2f}\n"
+               f"20봉이평선: ${latest_ma20:.2f}")
         send_telegram(msg)
 
 if __name__ == "__main__":
