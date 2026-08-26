@@ -25,14 +25,12 @@ def calculate_rsi(data, window=14):
 
 def check_symbol(ticker, name):
     """종목별 RSI 및 이평선 체크 함수"""
-    # prepost=True: 장전/장후 및 선물 24시간 거래 데이터 포함
     df = yf.download(tickers=ticker, period="5d", interval="15m", prepost=True, progress=False)
     
     if df.empty or len(df) < 20:
         print(f"[{name}({ticker})] 데이터를 불러오지 못했습니다.")
         return
 
-    # 단일 컬럼 정리 (yfinance 최신 버전에 따른 처리)
     if isinstance(df.columns, pd.MultiIndex):
         df = df.xs(ticker, level=1, axis=1)
 
@@ -53,22 +51,33 @@ def check_symbol(ticker, name):
 
     print(f"[{latest_time} KST] {name}({ticker}) 현재가: ${latest_price:.2f} | RSI: {latest_rsi:.2f} | 20봉이평선: ${latest_ma20:.2f}")
 
-    # 조건 1: RSI 30 이하 알림
-    if latest_rsi <= 30:
-        msg = f"🚨 [{name} RSI 매수 신호]\n시간: {latest_time} (KST)\n현재가: ${latest_price:.2f}\nRSI(15분봉): {latest_rsi:.2f}\n\nRSI가 30 이하로 내려갔습니다!"
-        send_telegram(msg)
+    # 최근 데이터 중에서 RSI가 35 이하였던 구간 감지 및 반등 체크
+    # 최근 10개 봉(2시간 30분) 이내에 RSI 35 이하 진입 내역이 있는지 확인
+    recent_df = df.tail(10)
+    rsi_under_35 = recent_df[recent_df['RSI'] <= 35]
+
+    if not rsi_under_35.empty:
+        min_rsi = rsi_under_35['RSI'].min() # RSI 35 이하 구간에서의 최저 RSI 값
         
+        # 조건: 현재 RSI가 최저점 대비 4pt 이상 상승했고, 현재 RSI도 여전히 40 이하인 반등 초기 단계
+        if latest_rsi >= (min_rsi + 4) and latest_rsi <= 40:
+            msg = (f"📈 [{name} RSI 바닥 반등 신호]\n"
+                   f"시간: {latest_time} (KST)\n"
+                   f"현재가: ${latest_price:.2f}\n"
+                   f"최저 RSI: {min_rsi:.2f} ➔ 현재 RSI: {latest_rsi:.2f} (+{latest_rsi - min_rsi:.2f}pt 상승)\n\n"
+                   f"RSI 35 이하 바닥 형성 후 +4pt 이상 반등했습니다!")
+            send_telegram(msg)
+
     # 조건 2: 현재가가 20봉 이동평균선 아래로 하락 시 알림
     if latest_price < latest_ma20:
-        msg = f"📉 [{name} 이평선 하향 이탈]\n시간: {latest_time} (KST)\n현재가: ${latest_price:.2f}\n20봉이평선: ${latest_ma20:.2f}\n\n현재가가 20봉 이동평균선 아래로 내려갔습니다!"
+        msg = f"📉 [{name} 이평선 하향 이탈]\n시간: {latest_time} (KST)\n현재가: ${latest_price:.2f}\n20봉이평선: ${latest_ma20:.2f}"
         send_telegram(msg)
 
 if __name__ == "__main__":
-    # 감시 대상 종목 목록 (티커, 표시이름)
     targets = [
         ("SOXL", "SOXL"),
         ("NQ=F", "나스닥100 선물")
     ]
     
     for ticker, name in targets:
-        check_rsi_for_target = check_symbol(ticker, name)
+        check_symbol(ticker, name)
