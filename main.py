@@ -68,18 +68,19 @@ def check_symbol(ticker, name):
 
     print(f"[{latest_time} KST] {name}({ticker}) 15분봉 현재가: ${latest_price:.2f} | RSI: {latest_rsi:.2f} | 20이평: ${latest_ma20:.2f}")
 
-    # 조건 1: 최근 10개 봉 이내 RSI 35 이하 진입 후 +4pt 이상 반등 감지
+    # 조건 1: 최근 10개 봉 이내 RSI 35 이하 진입 후 +2pt 이상 반등 감지
     recent_df = df.tail(10)
     rsi_under_35 = recent_df[recent_df['RSI'] <= 35]
 
     if not rsi_under_35.empty:
         min_rsi = rsi_under_35['RSI'].min()
-        if latest_rsi >= (min_rsi + 4) and latest_rsi <= 40:
+        # 최저점 대비 +2pt 이상 상승 시 알림
+        if latest_rsi >= (min_rsi + 2.0) and latest_rsi <= 40:
             msg = (f"📈 [{name} 15분봉 RSI 바닥 반등 신호]\n"
                    f"시간: {latest_time} (KST)\n"
                    f"현재가: ${latest_price:.2f}\n"
                    f"최저 RSI: {min_rsi:.2f} ➔ 현재 RSI: {latest_rsi:.2f} (+{latest_rsi - min_rsi:.2f}pt 상승)\n\n"
-                   f"RSI 35 이하 바닥 형성 후 +4pt 이상 반등했습니다!")
+                   f"RSI 35 이하 바닥 형성 후 +2pt 이상 반등했습니다!")
             send_telegram(msg)
 
     # 조건 2: 15분봉 20이평선 하향 돌파 알림
@@ -94,7 +95,7 @@ def bot_loop():
     """백그라운드에서 15분마다 감시하는 함수"""
     targets = [("SOXL", "SOXL"), ("TQQQ", "TQQQ")]
     print("🚀 Render에서 15분봉 기준 SOXL/TQQQ 감시 봇을 시작합니다 (15분 주기)...")
-    send_telegram("🚀 트레이딩뷰 표준 RSI 수식이 적용된 15분봉 감시 봇이 시작되었습니다!")
+    send_telegram("🚀 [RSI 35 이하 / +2pt 반등 알림]으로 설정된 감시 봇이 시작되었습니다!")
     
     while True:
         try:
