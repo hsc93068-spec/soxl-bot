@@ -28,13 +28,19 @@ def send_telegram(message):
         print(f"메시지 전송 실패: {e}")
 
 def calculate_rsi(data, window=14):
+    """트레이딩뷰 / 증권사 HTS 표준 (Wilder's Smoothing) RSI 계산 방식"""
     delta = data['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-    rs = gain / loss
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    
+    avg_gain = gain.ewm(alpha=1/window, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/window, adjust=False).mean()
+    
+    rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
 def check_symbol(ticker, name):
+    # 15분봉 데이터 로드
     df = yf.download(tickers=ticker, period="5d", interval="15m", prepost=True, progress=False)
     
     if df.empty or len(df) < 20:
@@ -60,7 +66,7 @@ def check_symbol(ticker, name):
     prev_price = float(df['Close'].iloc[-2])
     prev_ma20 = float(df['MA20'].iloc[-2])
 
-    print(f"[{latest_time} KST] {name}({ticker}) 현재가: ${latest_price:.2f} | RSI: {latest_rsi:.2f} | 20봉이평선: ${latest_ma20:.2f}")
+    print(f"[{latest_time} KST] {name}({ticker}) 15분봉 현재가: ${latest_price:.2f} | RSI: {latest_rsi:.2f} | 20이평: ${latest_ma20:.2f}")
 
     # 조건 1: 최근 10개 봉 이내 RSI 35 이하 진입 후 +4pt 이상 반등 감지
     recent_df = df.tail(10)
@@ -69,16 +75,16 @@ def check_symbol(ticker, name):
     if not rsi_under_35.empty:
         min_rsi = rsi_under_35['RSI'].min()
         if latest_rsi >= (min_rsi + 4) and latest_rsi <= 40:
-            msg = (f"📈 [{name} RSI 바닥 반등 신호]\n"
+            msg = (f"📈 [{name} 15분봉 RSI 바닥 반등 신호]\n"
                    f"시간: {latest_time} (KST)\n"
                    f"현재가: ${latest_price:.2f}\n"
                    f"최저 RSI: {min_rsi:.2f} ➔ 현재 RSI: {latest_rsi:.2f} (+{latest_rsi - min_rsi:.2f}pt 상승)\n\n"
                    f"RSI 35 이하 바닥 형성 후 +4pt 이상 반등했습니다!")
             send_telegram(msg)
 
-    # 조건 2: 20봉 이동평균선을 하향 돌파하는 순간 1번 알림
+    # 조건 2: 15분봉 20이평선 하향 돌파 알림
     if prev_price >= prev_ma20 and latest_price < latest_ma20:
-        msg = (f"📉 [{name} 20이평선 하향 돌파]\n"
+        msg = (f"📉 [{name} 15분봉 20이평선 하향 돌파]\n"
                f"시간: {latest_time} (KST)\n"
                f"직전가: ${prev_price:.2f} ➔ 현재가: ${latest_price:.2f}\n"
                f"20봉이평선: ${latest_ma20:.2f}")
@@ -87,8 +93,8 @@ def check_symbol(ticker, name):
 def bot_loop():
     """백그라운드에서 15분마다 감시하는 함수"""
     targets = [("SOXL", "SOXL"), ("TQQQ", "TQQQ")]
-    print("🚀 Render에서 SOXL/TQQQ 감시 봇을 시작합니다 (15분 주기)...")
-    send_telegram("🚀 Render에서 감시 봇이 성공적으로 시작되었습니다!")
+    print("🚀 Render에서 15분봉 기준 SOXL/TQQQ 감시 봇을 시작합니다 (15분 주기)...")
+    send_telegram("🚀 트레이딩뷰 표준 RSI 수식이 적용된 15분봉 감시 봇이 시작되었습니다!")
     
     while True:
         try:
@@ -97,12 +103,13 @@ def bot_loop():
         except Exception as e:
             print(f"감시 중 에러 발생: {e}")
         
+        # 15분(900초) 대기
         time.sleep(900)
 
 if __name__ == "__main__":
     # 봇 감시 로직을 별도 스레드로 실행
     threading.Thread(target=bot_loop, daemon=True).start()
     
-    # Render가 요구하는 포트로 Flask 웹 서버 실행
+    # Render 요구 포트 웹 서버 실행
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
