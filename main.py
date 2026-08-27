@@ -39,6 +39,22 @@ def calculate_rsi(data, window=14):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
+def calculate_mfi(df, window=14):
+    """트레이딩뷰 / 증권사 HTS 표준 MFI (Money Flow Index) 계산 방식"""
+    typical_price = (df['High'] + df['Low'] + df['Close']) / 3
+    raw_money_flow = typical_price * df['Volume']
+    
+    tp_diff = typical_price.diff()
+    
+    pos_flow = raw_money_flow.where(tp_diff > 0, 0)
+    neg_flow = raw_money_flow.where(tp_diff < 0, 0)
+    
+    pos_mf = pos_flow.rolling(window=window).sum()
+    neg_mf = neg_flow.rolling(window=window).sum()
+    
+    mfi = 100 - (100 / (1 + (pos_mf / neg_mf)))
+    return mfi
+
 def check_symbol(ticker, name):
     # 15분봉 데이터 로드
     df = yf.download(tickers=ticker, period="5d", interval="15m", prepost=True, progress=False)
@@ -51,6 +67,7 @@ def check_symbol(ticker, name):
         df = df.xs(ticker, level=1, axis=1)
 
     df['RSI'] = calculate_rsi(df)
+    df['MFI'] = calculate_mfi(df)
     df['MA20'] = df['Close'].rolling(window=20).mean()
     
     if df.index.tz is None:
@@ -60,13 +77,14 @@ def check_symbol(ticker, name):
 
     latest_price = float(df['Close'].iloc[-1])
     latest_rsi = float(df['RSI'].iloc[-1])
+    latest_mfi = float(df['MFI'].iloc[-1]) if not pd.isna(df['MFI'].iloc[-1]) else 0.0
     latest_ma20 = float(df['MA20'].iloc[-1])
     latest_time = df.index[-1].strftime('%Y-%m-%d %H:%M:%S')
 
     prev_price = float(df['Close'].iloc[-2])
     prev_ma20 = float(df['MA20'].iloc[-2])
 
-    print(f"[{latest_time} KST] {name}({ticker}) 15분봉 현재가: ${latest_price:.2f} | RSI: {latest_rsi:.2f} | 20이평: ${latest_ma20:.2f}")
+    print(f"[{latest_time} KST] {name}({ticker}) 현재가: ${latest_price:.2f} | RSI: {latest_rsi:.2f} | MFI: {latest_mfi:.2f} | 20이평: ${latest_ma20:.2f}")
 
     # 조건 1: 최근 10개 봉 이내 RSI 35 이하 진입 후 +2pt 이상 반등 감지
     recent_df = df.tail(10)
@@ -74,8 +92,7 @@ def check_symbol(ticker, name):
 
     if not rsi_under_35.empty:
         min_rsi = rsi_under_35['RSI'].min()
-        # 최저점 대비 +2pt 이상 상승 시 알림
-        if latest_rsi >= (min_rsi + 2.0) and latest_rsi <= 40:
+        if latest_rsi >= (min_rsi + 2.0) and latest_rsi <= 45:
             msg = (f"📈 [{name} 15분봉 RSI 바닥 반등 신호]\n"
                    f"시간: {latest_time} (KST)\n"
                    f"현재가: ${latest_price:.2f}\n"
@@ -83,7 +100,20 @@ def check_symbol(ticker, name):
                    f"RSI 35 이하 바닥 형성 후 +2pt 이상 반등했습니다!")
             send_telegram(msg)
 
-    # 조건 2: 15분봉 20이평선 하향 돌파 알림
+    # 조건 2: 최근 10개 봉 이내 MFI 20 이하 진입 후 +2pt 이상 반등 감지
+    mfi_under_20 = recent_df[recent_df['MFI'] <= 20]
+
+    if not mfi_under_20.empty:
+        min_mfi = mfi_under_20['MFI'].min()
+        if latest_mfi >= (min_mfi + 2.0) and latest_mfi <= 30:
+            msg = (f"💡 [{name} 15분봉 MFI 자금유입 반등 신호]\n"
+                   f"시간: {latest_time} (KST)\n"
+                   f"현재가: ${latest_price:.2f}\n"
+                   f"최저 MFI: {min_mfi:.2f} ➔ 현재 MFI: {latest_mfi:.2f} (+{latest_mfi - min_mfi:.2f}pt 상승)\n\n"
+                   f"MFI 20 이하 극심한 과매도 후 거래량을 동반한 +2pt 이상 반등이 시작되었습니다!")
+            send_telegram(msg)
+
+    # 조건 3: 15분봉 20이평선 하향 돌파 알림
     if prev_price >= prev_ma20 and latest_price < latest_ma20:
         msg = (f"📉 [{name} 15분봉 20이평선 하향 돌파]\n"
                f"시간: {latest_time} (KST)\n"
@@ -93,9 +123,9 @@ def check_symbol(ticker, name):
 
 def bot_loop():
     """백그라운드에서 15분마다 감시하는 함수"""
-    targets = [("SOXL", "SOXL"), ("TQQQ", "TQQQ")]
-    print("🚀 Render에서 15분봉 기준 SOXL/TQQQ 감시 봇을 시작합니다 (15분 주기)...")
-    send_telegram("🚀 [RSI 35 이하 / +2pt 반등 알림]으로 설정된 감시 봇이 시작되었습니다!")
+    targets = [("SOXL", "SOXL"), ("NQ=F", "나스닥100 선물")]
+    print("🚀 Render에서 SOXL / 나스닥100 선물 감시 봇을 시작합니다 (15분 주기)...")
+    send_telegram("🚀 [SOXL / 나스닥100 선물] RSI 35 이하(+2pt) 및 MFI 20 이하(+2pt) 감시 봇이 시작되었습니다!")
     
     while True:
         try:
