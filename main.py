@@ -1,14 +1,22 @@
 import os
 import time
+import threading
 import requests
 import yfinance as yf
 import pandas as pd
+from flask import Flask
+
+# Render 웹 서버 감지용 간단한 Flask 앱
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running!"
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 def send_telegram(message):
-    """텔레그램 메시지 전송 함수"""
     if not TELEGRAM_TOKEN or not CHAT_ID:
         print("텔레그램 토큰 또는 CHAT_ID가 설정되지 않았습니다.")
         return
@@ -20,7 +28,6 @@ def send_telegram(message):
         print(f"메시지 전송 실패: {e}")
 
 def calculate_rsi(data, window=14):
-    """RSI(상대강도지수) 계산 함수"""
     delta = data['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
@@ -28,7 +35,6 @@ def calculate_rsi(data, window=14):
     return 100 - (100 / (1 + rs))
 
 def check_symbol(ticker, name):
-    """종목별 RSI 및 이평선 체크 함수"""
     df = yf.download(tickers=ticker, period="5d", interval="15m", prepost=True, progress=False)
     
     if df.empty or len(df) < 20:
@@ -70,7 +76,7 @@ def check_symbol(ticker, name):
                    f"RSI 35 이하 바닥 형성 후 +4pt 이상 반등했습니다!")
             send_telegram(msg)
 
-    # 조건 2: 20봉 이동평균선을 '위에서 아래로 하향 돌파하는 순간'에만 1번 알림
+    # 조건 2: 20봉 이동평균선을 하향 돌파하는 순간 1번 알림
     if prev_price >= prev_ma20 and latest_price < latest_ma20:
         msg = (f"📉 [{name} 20이평선 하향 돌파]\n"
                f"시간: {latest_time} (KST)\n"
@@ -78,13 +84,10 @@ def check_symbol(ticker, name):
                f"20봉이평선: ${latest_ma20:.2f}")
         send_telegram(msg)
 
-if __name__ == "__main__":
-    targets = [
-        ("SOXL", "SOXL"),
-        ("TQQQ", "TQQQ")  # NQ=F 대신 TQQQ로 변경 원할 시 수정 가능
-    ]
-    
-    print("🚀 Render에서 SOXL 감시 봇을 시작합니다 (15분 주기)...")
+def bot_loop():
+    """백그라운드에서 15분마다 감시하는 함수"""
+    targets = [("SOXL", "SOXL"), ("TQQQ", "TQQQ")]
+    print("🚀 Render에서 SOXL/TQQQ 감시 봇을 시작합니다 (15분 주기)...")
     send_telegram("🚀 Render에서 감시 봇이 성공적으로 시작되었습니다!")
     
     while True:
@@ -94,5 +97,12 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"감시 중 에러 발생: {e}")
         
-        # 15분(900초) 대기 후 다시 실행
         time.sleep(900)
+
+if __name__ == "__main__":
+    # 봇 감시 로직을 별도 스레드로 실행
+    threading.Thread(target=bot_loop, daemon=True).start()
+    
+    # Render가 요구하는 포트로 Flask 웹 서버 실행
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
