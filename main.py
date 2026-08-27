@@ -86,31 +86,38 @@ def check_symbol(ticker, name):
 
     print(f"[{latest_time} KST] {name}({ticker}) 현재가: ${latest_price:.2f} | RSI: {latest_rsi:.2f} | MFI: {latest_mfi:.2f} | 20이평: ${latest_ma20:.2f}")
 
-    # 조건 1: 최근 10개 봉 이내 RSI 35 이하 진입 후 +2pt 이상 반등 감지
     recent_df = df.tail(10)
+
+    # 조건 1: 최근 10개 봉 이내 RSI 35 이하 진입 후 +2pt 이상 반등 (단, 바닥 대비 +10pt 미만만 알림)
     rsi_under_35 = recent_df[recent_df['RSI'] <= 35]
 
     if not rsi_under_35.empty:
         min_rsi = rsi_under_35['RSI'].min()
-        if latest_rsi >= (min_rsi + 2.0) and latest_rsi <= 45:
+        rsi_diff = latest_rsi - min_rsi
+        
+        # 반등폭이 +2pt 이상이면서 +10pt 미만일 때만 알림 발송
+        if 2.0 <= rsi_diff < 10.0:
             msg = (f"📈 [{name} 15분봉 RSI 바닥 반등 신호]\n"
                    f"시간: {latest_time} (KST)\n"
                    f"현재가: ${latest_price:.2f}\n"
-                   f"최저 RSI: {min_rsi:.2f} ➔ 현재 RSI: {latest_rsi:.2f} (+{latest_rsi - min_rsi:.2f}pt 상승)\n\n"
-                   f"RSI 35 이하 바닥 형성 후 +2pt 이상 반등했습니다!")
+                   f"최저 RSI: {min_rsi:.2f} ➔ 현재 RSI: {latest_rsi:.2f} (+{rsi_diff:.2f}pt 상승)\n\n"
+                   f"RSI 35 이하 바닥 형성 후 적정 범위(+2pt~+10pt) 내에서 반등 중입니다.")
             send_telegram(msg)
 
-    # 조건 2: 최근 10개 봉 이내 MFI 20 이하 진입 후 +2pt 이상 반등 감지
+    # 조건 2: 최근 10개 봉 이내 MFI 20 이하 진입 후 +2pt 이상 반등 (단, 바닥 대비 +10pt 미만만 알림)
     mfi_under_20 = recent_df[recent_df['MFI'] <= 20]
 
     if not mfi_under_20.empty:
         min_mfi = mfi_under_20['MFI'].min()
-        if latest_mfi >= (min_mfi + 2.0) and latest_mfi <= 30:
+        mfi_diff = latest_mfi - min_mfi
+        
+        # 반등폭이 +2pt 이상이면서 +10pt 미만일 때만 알림 발송
+        if 2.0 <= mfi_diff < 10.0:
             msg = (f"💡 [{name} 15분봉 MFI 자금유입 반등 신호]\n"
                    f"시간: {latest_time} (KST)\n"
                    f"현재가: ${latest_price:.2f}\n"
-                   f"최저 MFI: {min_mfi:.2f} ➔ 현재 MFI: {latest_mfi:.2f} (+{latest_mfi - min_mfi:.2f}pt 상승)\n\n"
-                   f"MFI 20 이하 극심한 과매도 후 거래량을 동반한 +2pt 이상 반등이 시작되었습니다!")
+                   f"최저 MFI: {min_mfi:.2f} ➔ 현재 MFI: {latest_mfi:.2f} (+{mfi_diff:.2f}pt 상승)\n\n"
+                   f"MFI 20 이하 과매도 후 거래량을 동반한 적정 반등(+2pt~+10pt)이 진행 중입니다.")
             send_telegram(msg)
 
     # 조건 3: 15분봉 20이평선 하향 돌파 알림
@@ -125,7 +132,7 @@ def bot_loop():
     """백그라운드에서 15분마다 감시하는 함수"""
     targets = [("SOXL", "SOXL"), ("NQ=F", "나스닥100 선물")]
     print("🚀 Render에서 SOXL / 나스닥100 선물 감시 봇을 시작합니다 (15분 주기)...")
-    send_telegram("🚀 [SOXL / 나스닥100 선물] RSI 35 이하(+2pt) 및 MFI 20 이하(+2pt) 감시 봇이 시작되었습니다!")
+    send_telegram("🚀 [상승폭 10pt 제한 필터 적용] RSI / MFI 반등 알림 봇이 시작되었습니다!")
     
     while True:
         try:
