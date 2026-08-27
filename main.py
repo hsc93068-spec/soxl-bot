@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 import yfinance as yf
 import pandas as pd
@@ -8,6 +9,9 @@ CHAT_ID = os.getenv("CHAT_ID")
 
 def send_telegram(message):
     """텔레그램 메시지 전송 함수"""
+    if not TELEGRAM_TOKEN or not CHAT_ID:
+        print("텔레그램 토큰 또는 CHAT_ID가 설정되지 않았습니다.")
+        return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     data = {"chat_id": CHAT_ID, "text": message}
     try:
@@ -34,23 +38,19 @@ def check_symbol(ticker, name):
     if isinstance(df.columns, pd.MultiIndex):
         df = df.xs(ticker, level=1, axis=1)
 
-    # RSI 및 20봉 이동평균선 계산
     df['RSI'] = calculate_rsi(df)
     df['MA20'] = df['Close'].rolling(window=20).mean()
     
-    # 한국 시간(Asia/Seoul)으로 타임존 변환
     if df.index.tz is None:
         df.index = df.index.tz_localize('UTC').tz_convert('Asia/Seoul')
     else:
         df.index = df.index.tz_convert('Asia/Seoul')
 
-    # 현재 봉 (최신 데이터)
     latest_price = float(df['Close'].iloc[-1])
     latest_rsi = float(df['RSI'].iloc[-1])
     latest_ma20 = float(df['MA20'].iloc[-1])
     latest_time = df.index[-1].strftime('%Y-%m-%d %H:%M:%S')
 
-    # 직전 봉 (15분 전 데이터)
     prev_price = float(df['Close'].iloc[-2])
     prev_ma20 = float(df['MA20'].iloc[-2])
 
@@ -61,8 +61,7 @@ def check_symbol(ticker, name):
     rsi_under_35 = recent_df[recent_df['RSI'] <= 35]
 
     if not rsi_under_35.empty:
-        min_rsi = rsi_under_35['RSI'].min() # RSI 35 이하 구간에서의 최저 RSI 값
-        
+        min_rsi = rsi_under_35['RSI'].min()
         if latest_rsi >= (min_rsi + 4) and latest_rsi <= 40:
             msg = (f"📈 [{name} RSI 바닥 반등 신호]\n"
                    f"시간: {latest_time} (KST)\n"
@@ -82,8 +81,18 @@ def check_symbol(ticker, name):
 if __name__ == "__main__":
     targets = [
         ("SOXL", "SOXL"),
-        ("NQ=F", "나스닥100 선물")
+        ("TQQQ", "TQQQ")  # NQ=F 대신 TQQQ로 변경 원할 시 수정 가능
     ]
     
-    for ticker, name in targets:
-        check_symbol(ticker, name)
+    print("🚀 Render에서 SOXL 감시 봇을 시작합니다 (15분 주기)...")
+    send_telegram("🚀 Render에서 감시 봇이 성공적으로 시작되었습니다!")
+    
+    while True:
+        try:
+            for ticker, name in targets:
+                check_symbol(ticker, name)
+        except Exception as e:
+            print(f"감시 중 에러 발생: {e}")
+        
+        # 15분(900초) 대기 후 다시 실행
+        time.sleep(900)
