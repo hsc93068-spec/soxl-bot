@@ -16,6 +16,9 @@ def home():
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
+# 중복 알림 방지용 (이미 알림을 보낸 최저 RSI의 시간을 기록)
+last_notified_min_time = {"SOXL": None, "NQ=F": None}
+
 def send_telegram(message):
     if not TELEGRAM_TOKEN or not CHAT_ID:
         print("텔레그램 토큰 또는 CHAT_ID가 설정되지 않았습니다.")
@@ -33,6 +36,7 @@ def calculate_rsi(data, window=14):
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
     
+    # Wilder's Smoothing (alpha = 1/14)
     avg_gain = gain.ewm(alpha=1/window, adjust=False).mean()
     avg_loss = loss.ewm(alpha=1/window, adjust=False).mean()
     
@@ -40,10 +44,12 @@ def calculate_rsi(data, window=14):
     return 100 - (100 / (1 + rs))
 
 def check_symbol(ticker, name):
-    # 15분봉 데이터 로드
-    df = yf.download(tickers=ticker, period="5d", interval="15m", prepost=True, progress=False)
+    global last_notified_min_time
+
+    # 데이터 기간을 1개월(1mo)로 늘려 차트와 RSI 계산 정밀도 일치시킴
+    df = yf.download(tickers=ticker, period="1mo", interval="15m", prepost=True, progress=False)
     
-    if df.empty or len(df) < 20:
+    if df.empty or len(df) < 50:
         print(f"[{name}({ticker})] 데이터를 불러오지 못했습니다.")
         return
 
@@ -68,23 +74,26 @@ def check_symbol(ticker, name):
 
     print(f"[{latest_time} KST] {name}({ticker}) 현재가: ${latest_price:.2f} | RSI: {latest_rsi:.2f} | 20이평: ${latest_ma20:.2f}")
 
+    # 최근 10개 봉(2시간 30분) 이내 데이터만 확인
     recent_df = df.tail(10)
-
-    # 조건 1: 최근 10개 봉 이내 RSI 35 이하 진입 후 +2pt 이상 반등 (단, 바닥 대비 +10pt 미만만 알림)
     rsi_under_35 = recent_df[recent_df['RSI'] <= 35]
 
     if not rsi_under_35.empty:
-        min_rsi = rsi_under_35['RSI'].min()
+        # 최근 10개 봉 중 RSI 최저점 지점 추출
+        min_rsi_idx = rsi_under_35['RSI'].idxmin()
+        min_rsi = float(rsi_under_35['RSI'].loc[min_rsi_idx])
         rsi_diff = latest_rsi - min_rsi
         
-        # 반등폭이 +2pt 이상이면서 +10pt 미만일 때만 알림 발송
+        # 조건: 반등폭이 +2pt 이상 ~ +10pt 미만 & 해당 바닥(최저점 시각)으로 이미 알림을 보내지 않았을 때만 발송
         if 2.0 <= rsi_diff < 10.0:
-            msg = (f"📈 [{name} 15분봉 RSI 바닥 반등 신호]\n"
-                   f"시간: {latest_time} (KST)\n"
-                   f"현재가: ${latest_price:.2f}\n"
-                   f"최저 RSI: {min_rsi:.2f} ➔ 현재 RSI: {latest_rsi:.2f} (+{rsi_diff:.2f}pt 상승)\n\n"
-                   f"RSI 35 이하 바닥 형성 후 적정 범위(+2pt~+10pt) 내에서 반등 중입니다.")
-            send_telegram(msg)
+            if last_notified_min_time[name] != min_rsi_idx:
+                last_notified_min_time[name] = min_rsi_idx
+                msg = (f"📈 [{name} 15분봉 RSI 바닥 반등 신호]\n"
+                       f"시간: {latest_time} (KST)\n"
+                       f"현재가: ${latest_price:.2f}\n"
+                       f"최저 RSI: {min_rsi:.2f} ➔ 현재 RSI: {latest_rsi:.2f} (+{rsi_diff:.2f}pt 상승)\n\n"
+                       f"RSI 35 이하 바닥 형성 후 적정 범위(+2pt~+10pt) 내에서 반등 중입니다.")
+                send_telegram(msg)
 
     # 조건 2: 15분봉 20이평선 하향 돌파 알림
     if prev_price >= prev_ma20 and latest_price < latest_ma20:
@@ -98,7 +107,7 @@ def bot_loop():
     """백그라운드에서 15분마다 감시하는 함수"""
     targets = [("SOXL", "SOXL"), ("NQ=F", "나스닥100 선물")]
     print("🚀 Render에서 SOXL / 나스닥100 선물 감시 봇을 시작합니다 (15분 주기)...")
-    send_telegram("🚀 [SOXL / 나스닥100 선물] RSI 반등 알림 봇이 수정 및 시작되었습니다!")
+    send_telegram("🚀 [RSI 정밀도 보정 + 중복 알림 방지] 감시 봇이 시작되었습니다!")
     
     while True:
         try:
