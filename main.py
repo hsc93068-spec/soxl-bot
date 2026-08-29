@@ -16,8 +16,13 @@ def home():
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# 동일 타점 중복 알림 방지 (15분 단위 캔들 시작 시간 기준)
-last_notified_time = {"SOXL": None, "NQ=F": None}
+# 동일 타점 중복 알림 방지 (15분 단위 캔들 시간 기준)
+last_notified_time = {
+    "NQU26(나스닥선물)": None,
+    "YMU26(다우선물)": None,
+    "ESU26(S&P500선물)": None,
+    "SOXX(반도체1배)": None
+}
 
 def send_telegram(message):
     if not TELEGRAM_TOKEN or not CHAT_ID:
@@ -58,7 +63,7 @@ def resample_and_calc_rsi(df_15m, rule, window=14):
 def check_symbol(ticker, name):
     global last_notified_time
 
-    # 15분봉 데이터 로드 (실시간 진행 봉 포함)
+    # 15분봉 데이터 로드 (실시간 진행 중 봉 포함)
     df_15m = yf.download(tickers=ticker, period="1mo", interval="15m", prepost=True, progress=False)
     
     if df_15m.empty or len(df_15m) < 50:
@@ -124,20 +129,25 @@ def check_symbol(ticker, name):
     if cond1 and cond2 and cond3:
         if last_notified_time[name] != latest_time:
             last_notified_time[name] = latest_time
-            msg = (f"🎯 [{name} 15m/30m/60m 정밀 바닥 반등 신호!]\n\n"
-                   f"시간: 실시간 진행 봉 기준\n"
+            msg = (f"🎯 [{name} 15m/30m/60m 3중 바닥 반등 신호!]\n\n"
+                   f"시간: 실시간 진행 봉 기준 ({latest_time} KST)\n"
                    f"현재가: ${latest_price:.2f}\n\n"
                    f"1️⃣ 15분봉(실시간): 최저 {rsi_15m_min:.1f} ➔ 현재 {rsi_15m_now:.1f} (+{rsi_15m_diff:.1f}pt)\n"
                    f"2️⃣ 30분봉(실시간): 최저 {rsi_30m_min:.1f} ➔ 현재 {rsi_30m_now:.1f} (+{rsi_30m_diff:.1f}pt)\n"
                    f"3️⃣ 60분봉(실시간): 최저 {rsi_60m_min:.1f} ➔ 현재 {rsi_60m_now:.1f} (+{rsi_60m_diff:.1f}pt)\n\n"
-                   f"🔥 3개 분봉 실시간 과매도 돌파 및 초입 반등 충족!")
+                   f"🔥 15m/30m/60m 실시간 과매도 돌파 및 초입 반등 동시 충족!")
             send_telegram(msg)
 
 def bot_loop():
     """백그라운드에서 매 1분마다 실시간으로 낚아채는 감시 루프"""
-    targets = [("SOXL", "SOXL"), ("NQ=F", "나스닥100 선물")]
-    print("🚀 멀티 타임프레임 실시간 순간 포착 감시 봇 시작 (1분 주기)...")
-    send_telegram("🚀 [15m(+3pt) / 30m(+2pt) / 60m(+1pt) 실시간 감시] 봇이 시작되었습니다!")
+    targets = [
+        ("NQ=F", "NQU26(나스닥선물)"),
+        ("YM=F", "YMU26(다우선물)"),
+        ("ES=F", "ESU26(S&P500선물)"),
+        ("SOXX", "SOXX(반도체1배)")
+    ]
+    print("🚀 4개 주요 종목 실시간 멀티 타임프레임 감시 봇 시작 (1분 주기)...")
+    send_telegram("🚀 [NQU26 / YMU26 / ESU26 / SOXX] 15m(+3pt)/30m(+2pt)/60m(+1pt) 실시간 3중 알림 봇이 시작되었습니다!")
     
     while True:
         try:
@@ -146,7 +156,7 @@ def bot_loop():
         except Exception as e:
             print(f"감시 중 에러 발생: {e}")
         
-        # 1분(60초)마다 실시간 가격 감시
+        # 1분(60초)마다 실시간 감시
         time.sleep(60)
 
 if __name__ == "__main__":
