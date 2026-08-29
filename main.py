@@ -58,7 +58,7 @@ def resample_and_calc_rsi(df_15m, rule, window=14):
 def check_symbol(ticker, name):
     global last_notified_time
 
-    # 15분봉 데이터 로드 (마지막 데이터는 실시간 진행 중인 현재 가격을 포함함)
+    # 15분봉 데이터 로드 (실시간 진행 봉 포함)
     df_15m = yf.download(tickers=ticker, period="1mo", interval="15m", prepost=True, progress=False)
     
     if df_15m.empty or len(df_15m) < 50:
@@ -82,7 +82,7 @@ def check_symbol(ticker, name):
     latest_price = float(df_15m['Close'].iloc[-1])
     latest_time = df_15m.index[-1].strftime('%Y-%m-%d %H:%M:%S')
 
-    # --- [조건 1] 15분봉(실시간): RSI 30 이하에서 +4pt 이상 반등 ---
+    # --- [조건 1] 15분봉(실시간): RSI 30 이하에서 +3pt 이상 반등 ---
     rec_15m = df_15m.tail(10)
     cond1 = False
     rsi_15m_min, rsi_15m_now, rsi_15m_diff = 0.0, 0.0, 0.0
@@ -91,10 +91,10 @@ def check_symbol(ticker, name):
         rsi_15m_min = float(under_30['RSI'].min())
         rsi_15m_now = float(df_15m['RSI'].iloc[-1])
         rsi_15m_diff = rsi_15m_now - rsi_15m_min
-        if rsi_15m_diff >= 4.0:
+        if rsi_15m_diff >= 3.0:
             cond1 = True
 
-    # --- [조건 2] 30분봉(실시간): RSI 35 이하에서 +3pt 이상 반등 ---
+    # --- [조건 2] 30분봉(실시간): RSI 35 이하에서 +2pt 이상 반등 ---
     rec_30m = df_30m.tail(10)
     cond2 = False
     rsi_30m_min, rsi_30m_now, rsi_30m_diff = 0.0, 0.0, 0.0
@@ -103,10 +103,10 @@ def check_symbol(ticker, name):
         rsi_30m_min = float(under_35['RSI'].min())
         rsi_30m_now = float(df_30m['RSI'].iloc[-1])
         rsi_30m_diff = rsi_30m_now - rsi_30m_min
-        if rsi_30m_diff >= 3.0:
+        if rsi_30m_diff >= 2.0:
             cond2 = True
 
-    # --- [조건 3] 60분봉(실시간): RSI 40 이하에서 +2pt 이상 반등 ---
+    # --- [조건 3] 60분봉(실시간): RSI 40 이하에서 +1pt 이상 반등 ---
     rec_60m = df_60m.tail(10)
     cond3 = False
     rsi_60m_min, rsi_60m_now, rsi_60m_diff = 0.0, 0.0, 0.0
@@ -115,7 +115,7 @@ def check_symbol(ticker, name):
         rsi_60m_min = float(under_40['RSI'].min())
         rsi_60m_now = float(df_60m['RSI'].iloc[-1])
         rsi_60m_diff = rsi_60m_now - rsi_60m_min
-        if rsi_60m_diff >= 2.0:
+        if rsi_60m_diff >= 1.0:
             cond3 = True
 
     print(f"[실시간 감시 중] {name} 현재가: ${latest_price:.2f} | 15m RSI: {rsi_15m_now:.1f} | 30m RSI: {rsi_30m_now:.1f} | 60m RSI: {rsi_60m_now:.1f}")
@@ -124,20 +124,20 @@ def check_symbol(ticker, name):
     if cond1 and cond2 and cond3:
         if last_notified_time[name] != latest_time:
             last_notified_time[name] = latest_time
-            msg = (f"🎯 [{name} 15m/30m/60m 완벽 동시 바닥 신호!]\n\n"
+            msg = (f"🎯 [{name} 15m/30m/60m 정밀 바닥 반등 신호!]\n\n"
                    f"시간: 실시간 진행 봉 기준\n"
                    f"현재가: ${latest_price:.2f}\n\n"
                    f"1️⃣ 15분봉(실시간): 최저 {rsi_15m_min:.1f} ➔ 현재 {rsi_15m_now:.1f} (+{rsi_15m_diff:.1f}pt)\n"
                    f"2️⃣ 30분봉(실시간): 최저 {rsi_30m_min:.1f} ➔ 현재 {rsi_30m_now:.1f} (+{rsi_30m_diff:.1f}pt)\n"
                    f"3️⃣ 60분봉(실시간): 최저 {rsi_60m_min:.1f} ➔ 현재 {rsi_60m_now:.1f} (+{rsi_60m_diff:.1f}pt)\n\n"
-                   f"🔥 3개 봉 모두 '실시간 진행 중' 과매도 돌파 및 반등 조건 충족! (신뢰도 최상)")
+                   f"🔥 3개 분봉 실시간 과매도 돌파 및 초입 반등 충족!")
             send_telegram(msg)
 
 def bot_loop():
     """백그라운드에서 매 1분마다 실시간으로 낚아채는 감시 루프"""
     targets = [("SOXL", "SOXL"), ("NQ=F", "나스닥100 선물")]
-    print("🚀 멀티 타임프레임 실시간 순간 포착 감시 봇을 시작합니다 (1분 주기)...")
-    send_telegram("🚀 [15m/30m/60m 실시간 3중 조건 동시 만족 알림] 1분 주기 감시가 시작되었습니다!")
+    print("🚀 멀티 타임프레임 실시간 순간 포착 감시 봇 시작 (1분 주기)...")
+    send_telegram("🚀 [15m(+3pt) / 30m(+2pt) / 60m(+1pt) 실시간 감시] 봇이 시작되었습니다!")
     
     while True:
         try:
@@ -146,7 +146,7 @@ def bot_loop():
         except Exception as e:
             print(f"감시 중 에러 발생: {e}")
         
-        # 1분(60초)마다 실시간 가격 감시 (봉이 닫히기 전 순간을 포착하기 위함)
+        # 1분(60초)마다 실시간 가격 감시
         time.sleep(60)
 
 if __name__ == "__main__":
