@@ -87,7 +87,7 @@ def check_symbol(ticker, name):
     latest_price = float(df_15m['Close'].iloc[-1])
     latest_time = df_15m.index[-1].strftime('%Y-%m-%d %H:%M:%S')
 
-    # --- [조건 1] 15분봉(실시간): RSI 30 이하에서 +3pt 이상 반등 ---
+    # --- [조건 1] 15분봉: RSI 30 이하 진입 후 최저점 대비 +3pt 이상 ~ +10pt 미만 반등 (10pt 이상 제외) ---
     rec_15m = df_15m.tail(10)
     cond1 = False
     rsi_15m_min, rsi_15m_now, rsi_15m_diff = 0.0, 0.0, 0.0
@@ -96,10 +96,11 @@ def check_symbol(ticker, name):
         rsi_15m_min = float(under_30['RSI'].min())
         rsi_15m_now = float(df_15m['RSI'].iloc[-1])
         rsi_15m_diff = rsi_15m_now - rsi_15m_min
-        if rsi_15m_diff >= 3.0:
+        # +3pt 이상 +10pt 미만일 때만 True (+10pt 이상 크게 오른 경우는 제외)
+        if 3.0 <= rsi_15m_diff < 10.0:
             cond1 = True
 
-    # --- [조건 2] 30분봉(실시간): RSI 35 이하에서 +2pt 이상 반등 ---
+    # --- [조건 2] 30분봉: RSI 35 이하 진입 후 최저점 대비 +2pt 이상 반등 ---
     rec_30m = df_30m.tail(10)
     cond2 = False
     rsi_30m_min, rsi_30m_now, rsi_30m_diff = 0.0, 0.0, 0.0
@@ -111,7 +112,7 @@ def check_symbol(ticker, name):
         if rsi_30m_diff >= 2.0:
             cond2 = True
 
-    # --- [조건 3] 60분봉(실시간): RSI 40 이하에서 +1pt 이상 반등 ---
+    # --- [조건 3] 60분봉: RSI 40 이하 진입 후 최저점 대비 +1pt 이상 반등 ---
     rec_60m = df_60m.tail(10)
     cond3 = False
     rsi_60m_min, rsi_60m_now, rsi_60m_diff = 0.0, 0.0, 0.0
@@ -123,7 +124,7 @@ def check_symbol(ticker, name):
         if rsi_60m_diff >= 1.0:
             cond3 = True
 
-    print(f"[실시간 감시 중] {name} 현재가: ${latest_price:.2f} | 15m RSI: {rsi_15m_now:.1f} | 30m RSI: {rsi_30m_now:.1f} | 60m RSI: {rsi_60m_now:.1f}")
+    print(f"[실시간 감시 중] {name} 현재가: ${latest_price:.2f} | 15m RSI: {rsi_15m_now:.1f} (+{rsi_15m_diff:.1f}pt) | 30m RSI: {rsi_30m_now:.1f} | 60m RSI: {rsi_60m_now:.1f}")
 
     # --- 조건 1, 2, 3 동시 만족 시에만 알림 발송 ---
     if cond1 and cond2 and cond3:
@@ -147,7 +148,7 @@ def bot_loop():
         ("SOXX", "SOXX(반도체1배)")
     ]
     print("🚀 4개 주요 종목 실시간 멀티 타임프레임 감시 봇 시작 (1분 주기)...")
-    send_telegram("🚀 [NQU26 / YMU26 / ESU26 / SOXX] 15m(+3pt)/30m(+2pt)/60m(+1pt) 실시간 3중 알림 봇이 시작되었습니다!")
+    send_telegram("🚀 [NQU26 / YMU26 / ESU26 / SOXX] 15m(+3~+10pt)/30m(+2pt)/60m(+1pt) 실시간 3중 알림 봇이 시작되었습니다!")
     
     while True:
         try:
