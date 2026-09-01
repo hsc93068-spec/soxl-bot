@@ -15,8 +15,7 @@ def home():
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# 종목별/알람별 마지막 알림을 보냈을 때의 '최저점 RSI' 기록
-# 구조: last_notified_min_rsi[symbol_name][alarm_key] = float
+# 종목별/알람별 마지막 알림 발송 당시의 '최저점 RSI' 기록
 last_notified_min_rsi = {
     "QQQ": {"alarm1": None, "alarm2": None, "alarm3": None},
     "SOXX": {"alarm1": None, "alarm2": None, "alarm3": None},
@@ -63,7 +62,7 @@ def resample_and_calc_rsi(df_15m, rule, window=14):
 def check_symbol(ticker, name):
     global last_notified_min_rsi
 
-    # 15분봉 데이터 로드 (실시간 진행 중 봉 포함, 최근 1달치)
+    # 15분봉 데이터 로드 (실시간 진행 중 봉 포함)
     df_15m = yf.download(tickers=ticker, period="1mo", interval="15m", prepost=True, progress=False)
     
     if df_15m.empty or len(df_15m) < 50:
@@ -73,7 +72,7 @@ def check_symbol(ticker, name):
     if isinstance(df_15m.columns, pd.MultiIndex):
         df_15m = df_15m.xs(ticker, level=1, axis=1)
 
-    # 15분, 30분, 60분 데이터 계산
+    # 15분, 30분, 60분 데이터 및 실시간 RSI 계산
     df_15m['RSI'] = calculate_rsi(df_15m)
     df_30m = resample_and_calc_rsi(df_15m, '30min')
     df_60m = resample_and_calc_rsi(df_15m, '60min')
@@ -87,14 +86,14 @@ def check_symbol(ticker, name):
     latest_price = float(df_15m['Close'].iloc[-1])
     latest_time_str = df_15m.index[-1].strftime('%Y-%m-%d %H:%M:%S')
 
-    # 최근 60분(15분봉 기준 최근 4개 봉) 데이터 정의
+    # 최근 60분 구간 데이터 분할 (15분봉 4개, 30분봉 2개, 60분봉 1개)
     recent_60m_15m = df_15m.tail(4)
     recent_60m_30m = df_30m.tail(2)
     recent_60m_60m = df_60m.tail(1)
 
     # ==========================================
     # 🚨 [알람 1] 15분봉: RSI 30 이하 -> +4pt 이상 ~ +10pt 미만 반등
-    # 조건: 최근 60분 이내 최저점 RSI <= 마지막 알림 발송 당시 최저점 RSI
+    # 차단 필터: 최근 60분 최저점 RSI < 마지막 알림 최저점 RSI 일 때만 발송
     # ==========================================
     under_30 = recent_60m_15m[recent_60m_15m['RSI'] <= 30]
     if not under_30.empty:
@@ -102,23 +101,22 @@ def check_symbol(ticker, name):
         rsi_now = float(df_15m['RSI'].iloc[-1])
         rsi_diff = rsi_now - rsi_min_60m
         
-        # 반등 폭 조건 (+4pt 이상 ~ +10pt 미만)
         if 4.0 <= rsi_diff < 10.0:
             last_min = last_notified_min_rsi[name]["alarm1"]
-            # 신규 알림 또는 최근 60분 이내 최저점이 이전 알림 최저점보다 작거나 같을 때만 발송
-            if last_min is None or rsi_min_60m <= last_min:
+            # 신규 알림이거나, 최근 60분 최저점이 이전 최저점보다 엄격히 작을 때만(엄격한 신저점 경신) 발송
+            if last_min is None or rsi_min_60m < last_min:
                 last_notified_min_rsi[name]["alarm1"] = rsi_min_60m
                 msg = (f"🚨 [알람1 - 15분봉 바닥 반등] {name}\n\n"
                        f"시간: 실시간 진행 봉 ({latest_time_str} KST)\n"
                        f"현재가: ${latest_price:.2f}\n"
                        f"15m RSI: 최저 {rsi_min_60m:.1f} ➔ 현재 {rsi_now:.1f} (+{rsi_diff:.1f}pt)\n\n"
                        f"👉 조건: RSI ≤ 30 진입 후 +4pt~+10pt 미만 반등 충족\n"
-                       f"📉 최근 60분 이내 최저점 갱신 확인 완료")
+                       f"📉 이전 최저점 대비 엄격한 신저점 경신 확인")
                 send_telegram(msg)
 
     # ==========================================
     # 🚨 [알람 2] 30분봉: RSI 33 이하 -> +3pt 이상 ~ +10pt 미만 반등
-    # 조건: 최근 60분 이내 최저점 RSI <= 마지막 알림 발송 당시 최저점 RSI
+    # 차단 필터: 최근 60분 최저점 RSI < 마지막 알림 최저점 RSI 일 때만 발송
     # ==========================================
     under_33 = recent_60m_30m[recent_60m_30m['RSI'] <= 33]
     if not under_33.empty:
@@ -128,19 +126,19 @@ def check_symbol(ticker, name):
         
         if 3.0 <= rsi_diff < 10.0:
             last_min = last_notified_min_rsi[name]["alarm2"]
-            if last_min is None or rsi_min_60m <= last_min:
+            if last_min is None or rsi_min_60m < last_min:
                 last_notified_min_rsi[name]["alarm2"] = rsi_min_60m
                 msg = (f"🚨 [알람2 - 30분봉 바닥 반등] {name}\n\n"
                        f"시간: 실시간 진행 봉 ({latest_time_str} KST)\n"
                        f"현재가: ${latest_price:.2f}\n"
                        f"30m RSI: 최저 {rsi_min_60m:.1f} ➔ 현재 {rsi_now:.1f} (+{rsi_diff:.1f}pt)\n\n"
                        f"👉 조건: RSI ≤ 33 진입 후 +3pt~+10pt 미만 반등 충족\n"
-                       f"📉 최근 60분 이내 최저점 갱신 확인 완료")
+                       f"📉 이전 최저점 대비 엄격한 신저점 경신 확인")
                 send_telegram(msg)
 
     # ==========================================
     # 🚨 [알람 3] 60분봉: RSI 36 이하 -> +2pt 이상 ~ +10pt 미만 반등
-    # 조건: 최근 60분 이내 최저점 RSI <= 마지막 알림 발송 당시 최저점 RSI
+    # 차단 필터: 최근 60분 최저점 RSI < 마지막 알림 최저점 RSI 일 때만 발송
     # ==========================================
     under_36 = recent_60m_60m[recent_60m_60m['RSI'] <= 36]
     if not under_36.empty:
@@ -150,14 +148,14 @@ def check_symbol(ticker, name):
         
         if 2.0 <= rsi_diff < 10.0:
             last_min = last_notified_min_rsi[name]["alarm3"]
-            if last_min is None or rsi_min_60m <= last_min:
+            if last_min is None or rsi_min_60m < last_min:
                 last_notified_min_rsi[name]["alarm3"] = rsi_min_60m
                 msg = (f"🚨 [알람3 - 60분봉 바닥 반등] {name}\n\n"
                        f"시간: 실시간 진행 봉 ({latest_time_str} KST)\n"
                        f"현재가: ${latest_price:.2f}\n"
                        f"60m RSI: 최저 {rsi_min_60m:.1f} ➔ 현재 {rsi_now:.1f} (+{rsi_diff:.1f}pt)\n\n"
                        f"👉 조건: RSI ≤ 36 진입 후 +2pt~+10pt 미만 반등 충족\n"
-                       f"📉 최근 60분 이내 최저점 갱신 확인 완료")
+                       f"📉 이전 최저점 대비 엄격한 신저점 경신 확인")
                 send_telegram(msg)
 
     rsi_15m_c = float(df_15m['RSI'].iloc[-1])
@@ -174,7 +172,7 @@ def bot_loop():
         ("VOO", "VOO")
     ]
     print("🚀 QQQ / SOXX / DIA / VOO 개별 독립 알람 봇 시작 (1분 주기)...")
-    send_telegram("🚀 [QQQ / SOXX / DIA / VOO] 최저점 갱신 필터가 적용된 실시간 알람 봇이 시작되었습니다!")
+    send_telegram("🚀 [QQQ / SOXX / DIA / VOO] 엄격한 신저점 경신 필터가 반영된 실시간 알람 봇이 정상 시작되었습니다!")
     
     while True:
         try:
