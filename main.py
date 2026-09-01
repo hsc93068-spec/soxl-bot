@@ -15,7 +15,6 @@ def home():
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# 5개 종목의 알람별 마지막 '알림 발송 시 최저점 RSI' 기록
 last_notified_min_rsi = {
     "BTC(비트코인)": {"alarm1": None, "alarm2": None, "alarm3": None},
     "QQQ": {"alarm1": None, "alarm2": None, "alarm3": None},
@@ -26,7 +25,6 @@ last_notified_min_rsi = {
 
 def send_telegram(message):
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("텔레그램 토큰 또는 CHAT_ID가 설정되지 않았습니다.")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     data = {"chat_id": CHAT_ID, "text": message}
@@ -36,7 +34,6 @@ def send_telegram(message):
         print(f"메시지 전송 실패: {e}")
 
 def calculate_rsi(data, window=14):
-    """트레이딩뷰 / HTS 표준 (Wilder's Smoothing) RSI 계산 방식"""
     delta = data['Close'].diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
@@ -48,8 +45,7 @@ def calculate_rsi(data, window=14):
     return 100 - (100 / (1 + rs))
 
 def resample_and_calc_rsi(df_15m, rule, window=14):
-    """15분봉 데이터를 기반으로 30분/60분봉 리샘플링 및 실시간 RSI 계산"""
-    resampled = df_15m.resample(rule).agg({
+    resampled = df_15m.resample(rule, label='right', closed='right').agg({
         'Open': 'first',
         'High': 'max',
         'Low': 'min',
@@ -63,17 +59,14 @@ def resample_and_calc_rsi(df_15m, rule, window=14):
 def check_symbol(ticker, name):
     global last_notified_min_rsi
 
-    # 15분봉 데이터 로드 (실시간 진행 중 봉 포함)
-    df_15m = yf.download(tickers=ticker, period="1mo", interval="15m", prepost=True, progress=False)
+    df_15m = yf.download(tickers=ticker, period="5d", interval="15m", prepost=True, progress=False)
     
     if df_15m.empty or len(df_15m) < 50:
-        print(f"[{name}({ticker})] 데이터를 불러오지 못했습니다.")
         return
 
     if isinstance(df_15m.columns, pd.MultiIndex):
         df_15m = df_15m.xs(ticker, level=1, axis=1)
 
-    # 15분, 30분, 60분 데이터 및 실시간 RSI 계산
     df_15m['RSI'] = calculate_rsi(df_15m)
     df_30m = resample_and_calc_rsi(df_15m, '30min')
     df_60m = resample_and_calc_rsi(df_15m, '60min')
@@ -87,21 +80,18 @@ def check_symbol(ticker, name):
     latest_price = float(df_15m['Close'].iloc[-1])
     latest_time_str = df_15m.index[-1].strftime('%Y-%m-%d %H:%M:%S')
 
-    # 탐색 구간 확장: 15분봉 최근 4개(1시간), 30분봉 최근 4개(2시간), 60분봉 최근 6개(6시간)
+    # ==========================================
+    # 🚨 [알람 1] 15분봉: RSI 30 이하 진입 후 +4pt~+10pt 반등
+    # 조건 추가: 현재 RSI도 35 이하로 바닥권 유지 중이어야 함
+    # ==========================================
     search_15m = df_15m.tail(4)
-    search_30m = df_30m.tail(4)
-    search_60m = df_60m.tail(6)
-
-    # ==========================================
-    # 🚨 [알람 1] 15분봉: RSI 30 이하 -> +4pt 이상 ~ +10pt 미만 반등
-    # ==========================================
     under_30 = search_15m[search_15m['RSI'] <= 30]
     if not under_30.empty:
         rsi_min = float(under_30['RSI'].min())
         rsi_now = float(df_15m['RSI'].iloc[-1])
         rsi_diff = rsi_now - rsi_min
         
-        if 4.0 <= rsi_diff < 10.0:
+        if 4.0 <= rsi_diff < 10.0 and rsi_now <= 36.0:
             last_min = last_notified_min_rsi[name]["alarm1"]
             if last_min is None or (last_min - rsi_min > 2.0):
                 last_notified_min_rsi[name]["alarm1"] = rsi_min
@@ -114,15 +104,17 @@ def check_symbol(ticker, name):
                 send_telegram(msg)
 
     # ==========================================
-    # 🚨 [알람 2] 30분봉: RSI 33 이하 -> +3pt 이상 ~ +10pt 미만 반등
+    # 🚨 [알람 2] 30분봉: RSI 33 이하 진입 후 +3pt~+10pt 반등
+    # 조건 추가: 현재 RSI도 38 이하로 바닥권 유지 중이어야 함
     # ==========================================
+    search_30m = df_30m.tail(3)
     under_33 = search_30m[search_30m['RSI'] <= 33]
     if not under_33.empty:
         rsi_min = float(under_33['RSI'].min())
         rsi_now = float(df_30m['RSI'].iloc[-1])
         rsi_diff = rsi_now - rsi_min
         
-        if 3.0 <= rsi_diff < 10.0:
+        if 3.0 <= rsi_diff < 10.0 and rsi_now <= 39.0:
             last_min = last_notified_min_rsi[name]["alarm2"]
             if last_min is None or (last_min - rsi_min > 1.0):
                 last_notified_min_rsi[name]["alarm2"] = rsi_min
@@ -135,16 +127,17 @@ def check_symbol(ticker, name):
                 send_telegram(msg)
 
     # ==========================================
-    # 🚨 [알람 3] 60분봉: RSI 36 이하 -> +2pt 이상 ~ +10pt 미만 반등
-    # (최근 6개 봉까지 탐색 범위를 넓혀 60분봉 과매도 누락 완벽 방지)
+    # 🚨 [알람 3] 60분봉: RSI 36 이하 진입 후 +2pt~+10pt 반등
+    # 조건 추가: 최근 2봉 이내 과매도 진입 & 현재 RSI 40 이하일 때만 허용
     # ==========================================
+    search_60m = df_60m.tail(2)
     under_36 = search_60m[search_60m['RSI'] <= 36]
     if not under_36.empty:
         rsi_min = float(under_36['RSI'].min())
         rsi_now = float(df_60m['RSI'].iloc[-1])
         rsi_diff = rsi_now - rsi_min
         
-        if 2.0 <= rsi_diff < 10.0:
+        if 2.0 <= rsi_diff < 10.0 and rsi_now <= 40.0:
             last_min = last_notified_min_rsi[name]["alarm3"]
             if last_min is None or (last_min - rsi_min > 0.5):
                 last_notified_min_rsi[name]["alarm3"] = rsi_min
@@ -162,7 +155,6 @@ def check_symbol(ticker, name):
     print(f"[실시간 감시 중] {name} 현재가: ${latest_price:,.2f} | 15m RSI: {rsi_15m_c:.1f} | 30m RSI: {rsi_30m_c:.1f} | 60m RSI: {rsi_60m_c:.1f}")
 
 def bot_loop():
-    """1분 주기 백그라운드 실시간 감시 루프"""
     targets = [
         ("BTC-USD", "BTC(비트코인)"),
         ("QQQ", "QQQ"),
@@ -170,8 +162,8 @@ def bot_loop():
         ("DIA", "DIA"),
         ("VOO", "VOO")
     ]
-    print("🚀 [60분봉 감시 범위 보완 완료] 알람 봇 시작 (1분 주기)...")
-    send_telegram("🚀 [BTC-USD / QQQ / SOXX / DIA / VOO] 60분봉 감시 범위가 보완된 실시간 알람 봇이 정상 시작되었습니다!")
+    print("🚀 [과거 데이터 오발송 방지 로직 보완 완료] 알람 봇 시작...")
+    send_telegram("🚀 [수정 완료] 실시간 봉 묶음 오차 보정 및 지연 알림 방지 로직이 업데이트되었습니다!")
     
     while True:
         try:
