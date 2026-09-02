@@ -1,3 +1,26 @@
+import os
+from threading import Thread
+from flask import Flask
+
+# Render 포트 감지용 가짜 웹서버
+app = Flask("")
+
+
+@app.route("/")
+def home():
+    return "Bot is alive!"
+
+
+def run_flask():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
+
+
+# 백그라운드로 웹서버 실행
+Thread(target=run_flask).start()
+
+# --- 이 밑으로는 기존 while True 코드 유지 ---
+
 # ==========================================
 # VIX 마디가 알림 보완 버전 (17 초과 첫 알림 / 18, 19, 20, 21 발송)
 # ==========================================
