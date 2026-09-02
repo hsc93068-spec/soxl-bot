@@ -1,181 +1,204 @@
+import json
 import os
-import time
-import threading
 import requests
-import yfinance as yf
-import pandas as pd
-from flask import Flask
 
-app = Flask(__name__)
+# ==========================================
+# 1. 상태 저장 파일 및 설정
+# ==========================================
+STATE_FILE = "macro_alert_state.json"
+# TELEGRAM_TOKEN = "YOUR_BOT_TOKEN"
+# CHAT_ID = "YOUR_CHAT_ID"
 
-@app.route('/')
-def home():
-    return "Multi-Asset RSI Alarm Bot is running!"
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+def send_telegram_msg(message):
+    print(f"[텔레그램 발송]\n{message}\n")
+    # requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", data={"chat_id": CHAT_ID, "text": message})
 
-last_notified_min_rsi = {
-    "BTC(비트코인)": {"alarm1": None, "alarm2": None, "alarm3": None},
-    "QQQ": {"alarm1": None, "alarm2": None, "alarm3": None},
-    "SOXX": {"alarm1": None, "alarm2": None, "alarm3": None},
-    "DIA": {"alarm1": None, "alarm2": None, "alarm3": None},
-    "VOO": {"alarm1": None, "alarm2": None, "alarm3": None}
-}
 
-def send_telegram(message):
-    if not TELEGRAM_TOKEN or not CHAT_ID:
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {"chat_id": CHAT_ID, "text": message}
+# ==========================================
+# 2. 데이터 수집 모듈 (공탐지수 & VIX)
+# ==========================================
+def get_fear_and_greed():
+    """CNN Fear & Greed API에서 점수 수집"""
+    url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+    headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        requests.post(url, data=data, timeout=10)
+        res = requests.get(url, headers=headers, timeout=10)
+        return round(res.json()["fear_and_greed"]["score"])
     except Exception as e:
-        print(f"메시지 전송 실패: {e}")
+        print(f"[오류] 공탐지수 수집 실패: {e}")
+        return None
 
-def calculate_rsi(data, window=14):
-    delta = data['Close'].diff()
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-    
-    avg_gain = gain.ewm(alpha=1/window, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/window, adjust=False).mean()
-    
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
 
-def resample_and_calc_rsi(df_15m, rule, window=14):
-    resampled = df_15m.resample(rule, label='right', closed='right').agg({
-        'Open': 'first',
-        'High': 'max',
-        'Low': 'min',
-        'Close': 'last',
-        'Volume': 'sum'
-    }).dropna()
-    
-    resampled['RSI'] = calculate_rsi(resampled, window)
-    return resampled
+def get_vix_index():
+    """VIX 수집 (yfinance 또는 API 연동 예시)"""
+    try:
+        # import yfinance as yf
+        # vix_data = yf.Ticker("^VIX").history(period="1d")
+        # return round(vix_data["Close"].iloc[-1], 2)
+        return 18.4  # 실전 연동 시 실제 수치 반환
+    except Exception as e:
+        print(f"[오류] VIX 수집 실패: {e}")
+        return None
 
-def check_symbol(ticker, name):
-    global last_notified_min_rsi
 
-    df_15m = yf.download(tickers=ticker, period="5d", interval="15m", prepost=True, progress=False)
-    
-    if df_15m.empty or len(df_15m) < 50:
-        return
-
-    if isinstance(df_15m.columns, pd.MultiIndex):
-        df_15m = df_15m.xs(ticker, level=1, axis=1)
-
-    df_15m['RSI'] = calculate_rsi(df_15m)
-    df_30m = resample_and_calc_rsi(df_15m, '30min')
-    df_60m = resample_and_calc_rsi(df_15m, '60min')
-
-    for df in [df_15m, df_30m, df_60m]:
-        if df.index.tz is None:
-            df.index = df.index.tz_localize('UTC').tz_convert('Asia/Seoul')
-        else:
-            df.index = df.index.tz_convert('Asia/Seoul')
-
-    latest_price = float(df_15m['Close'].iloc[-1])
-    latest_time_str = df_15m.index[-1].strftime('%Y-%m-%d %H:%M:%S')
-
-    # ==========================================
-    # 🚨 [알람 1] 15분봉: RSI 30 이하 진입 후 +4pt~+10pt 반등
-    # 조건 추가: 현재 RSI도 35 이하로 바닥권 유지 중이어야 함
-    # ==========================================
-    search_15m = df_15m.tail(4)
-    under_30 = search_15m[search_15m['RSI'] <= 30]
-    if not under_30.empty:
-        rsi_min = float(under_30['RSI'].min())
-        rsi_now = float(df_15m['RSI'].iloc[-1])
-        rsi_diff = rsi_now - rsi_min
-        
-        if 4.0 <= rsi_diff < 10.0 and rsi_now <= 36.0:
-            last_min = last_notified_min_rsi[name]["alarm1"]
-            if last_min is None or (last_min - rsi_min > 2.0):
-                last_notified_min_rsi[name]["alarm1"] = rsi_min
-                msg = (f"🚨 [알람1 - 15분봉 바닥 반등] {name}\n\n"
-                       f"시간: 실시간 진행 봉 ({latest_time_str} KST)\n"
-                       f"현재가: ${latest_price:,.2f}\n"
-                       f"15m RSI: 최저 {rsi_min:.1f} ➔ 현재 {rsi_now:.1f} (+{rsi_diff:.1f}pt)\n\n"
-                       f"👉 조건: RSI ≤ 30 진입 후 +4pt~+10pt 미만 반등 충족\n"
-                       f"📉 이전 최저점 대비 >2pt 유의미한 신저점 경신")
-                send_telegram(msg)
-
-    # ==========================================
-    # 🚨 [알람 2] 30분봉: RSI 33 이하 진입 후 +3pt~+10pt 반등
-    # 조건 추가: 현재 RSI도 38 이하로 바닥권 유지 중이어야 함
-    # ==========================================
-    search_30m = df_30m.tail(3)
-    under_33 = search_30m[search_30m['RSI'] <= 33]
-    if not under_33.empty:
-        rsi_min = float(under_33['RSI'].min())
-        rsi_now = float(df_30m['RSI'].iloc[-1])
-        rsi_diff = rsi_now - rsi_min
-        
-        if 3.0 <= rsi_diff < 10.0 and rsi_now <= 39.0:
-            last_min = last_notified_min_rsi[name]["alarm2"]
-            if last_min is None or (last_min - rsi_min > 1.0):
-                last_notified_min_rsi[name]["alarm2"] = rsi_min
-                msg = (f"🚨 [알람2 - 30분봉 바닥 반등] {name}\n\n"
-                       f"시간: 실시간 진행 봉 ({latest_time_str} KST)\n"
-                       f"현재가: ${latest_price:,.2f}\n"
-                       f"30m RSI: 최저 {rsi_min:.1f} ➔ 현재 {rsi_now:.1f} (+{rsi_diff:.1f}pt)\n\n"
-                       f"👉 조건: RSI ≤ 33 진입 후 +3pt~+10pt 미만 반등 충족\n"
-                       f"📉 이전 최저점 대비 >1pt 유의미한 신저점 경신")
-                send_telegram(msg)
-
-    # ==========================================
-    # 🚨 [알람 3] 60분봉: RSI 36 이하 진입 후 +2pt~+10pt 반등
-    # 조건 추가: 최근 2봉 이내 과매도 진입 & 현재 RSI 40 이하일 때만 허용
-    # ==========================================
-    search_60m = df_60m.tail(2)
-    under_36 = search_60m[search_60m['RSI'] <= 36]
-    if not under_36.empty:
-        rsi_min = float(under_36['RSI'].min())
-        rsi_now = float(df_60m['RSI'].iloc[-1])
-        rsi_diff = rsi_now - rsi_min
-        
-        if 2.0 <= rsi_diff < 10.0 and rsi_now <= 40.0:
-            last_min = last_notified_min_rsi[name]["alarm3"]
-            if last_min is None or (last_min - rsi_min > 0.5):
-                last_notified_min_rsi[name]["alarm3"] = rsi_min
-                msg = (f"🚨 [알람3 - 60분봉 바닥 반등] {name}\n\n"
-                       f"시간: 실시간 진행 봉 ({latest_time_str} KST)\n"
-                       f"현재가: ${latest_price:,.2f}\n"
-                       f"60m RSI: 최저 {rsi_min:.1f} ➔ 현재 {rsi_now:.1f} (+{rsi_diff:.1f}pt)\n\n"
-                       f"👉 조건: RSI ≤ 36 진입 후 +2pt~+10pt 미만 반등 충족\n"
-                       f"📉 이전 최저점 대비 >0.5pt 유의미한 신저점 경신")
-                send_telegram(msg)
-
-    rsi_15m_c = float(df_15m['RSI'].iloc[-1])
-    rsi_30m_c = float(df_30m['RSI'].iloc[-1])
-    rsi_60m_c = float(df_60m['RSI'].iloc[-1])
-    print(f"[실시간 감시 중] {name} 현재가: ${latest_price:,.2f} | 15m RSI: {rsi_15m_c:.1f} | 30m RSI: {rsi_30m_c:.1f} | 60m RSI: {rsi_60m_c:.1f}")
-
-def bot_loop():
-    targets = [
-        ("BTC-USD", "BTC(비트코인)"),
-        ("QQQ", "QQQ"),
-        ("SOXX", "SOXX"),
-        ("DIA", "DIA"),
-        ("VOO", "VOO")
-    ]
-    print("🚀 [과거 데이터 오발송 방지 로직 보완 완료] 알람 봇 시작...")
-    send_telegram("🚀 [수정 완료] 실시간 봉 묶음 오차 보정 및 지연 알림 방지 로직이 업데이트되었습니다!")
-    
-    while True:
+# ==========================================
+# 3. 상태 관리 (JSON)
+# ==========================================
+def load_alert_state():
+    default_state = {
+        "last_fg_score": 100,
+        "last_vix_level": 0,  # 0: 17이하, 17: 첫진입, 18~21: 각 마디가
+    }
+    if os.path.exists(STATE_FILE):
         try:
-            for ticker, name in targets:
-                check_symbol(ticker, name)
-        except Exception as e:
-            print(f"감시 중 에러 발생: {e}")
-        
-        time.sleep(60)
+            with open(STATE_FILE, "r") as f:
+                return {**default_state, **json.load(f)}
+        except Exception:
+            return default_state
+    return default_state
+
+
+def save_alert_state(state):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f)
+
+
+# ==========================================
+# 4. 공탐지수 전저점 돌파 알림 (60 이하, 5pt 단위)
+# ==========================================
+def check_fear_and_greed_alert(current_fg, state):
+    if current_fg is None:
+        return state
+
+    last_fg = state.get("last_fg_score", 100)
+
+    # 60 초과로 복귀 시 리셋
+    if current_fg > 60:
+        state["last_fg_score"] = 100
+        return state
+
+    # 60 이하이면서 이전 알림 대비 5pt 이상 하락 시
+    if current_fg <= 60 and (last_fg - current_fg) >= 5:
+        target_step = (current_fg // 5) * 5
+
+        msg = f"🚨 [공포지수 하향 돌파 알림]\n"
+        msg += f"• 현재 공탐지수: {current_fg}pt (기준 단계: {target_step}pt 이하)\n\n"
+
+        if current_fg <= 10:
+            msg += "🔥 [대바닥 3차] 지표 무관 총 투자금 추가 10% (누적 30%) 진입!"
+        elif current_fg <= 20:
+            msg += "⚠️ [극단 공포 2차] 지표 무관 총 투자금 추가 10% (누적 20%) 진입!"
+        elif current_fg <= 30:
+            msg += "📢 [공포 진입 1차] 지표 무관 총 투자금 10% 1차 진입!"
+        else:
+            msg += "⛔ 하락/관망 구간 (일반 RSI 매수 금지 유지)"
+
+        send_telegram_msg(msg)
+        state["last_fg_score"] = target_step
+
+    return state
+
+
+# ==========================================
+# 5. VIX 마디가 알림 (17 초과 첫 알림 / 18, 19, 20, 21만 발송)
+# ==========================================
+def check_vix_alert(current_vix, state):
+    if current_vix is None:
+        return state
+
+    last_vix_level = state.get("last_vix_level", 0)
+
+    # 1. VIX 17 이하: 안심 구간 (리셋 및 알림 무시)
+    if current_vix <= 17.0:
+        state["last_vix_level"] = 0
+        return state
+
+    # 2. VIX 22 이상: 극단 위험 구간 (알림 안 보내고 상태만 22로 유지)
+    if current_vix >= 22.0:
+        state["last_vix_level"] = 22
+        return state
+
+    # 3. VIX 17 초과 ~ 22 미만 구간의 마디가 계산 (17, 18, 19, 20, 21)
+    current_level = int(current_vix)  # 예: 18.4 -> 18, 17.8 -> 17
+
+    # 이전 마디가 레벨과 달라졌을 때만 알림 발생
+    if current_level != last_vix_level:
+        msg = f"⚠️ [VIX 변동성 마디가 알림]\n"
+        msg += f"• 현재 VIX: {current_vix:.2f} (마디가: {current_level})\n\n"
+
+        if current_level == 17 and last_vix_level == 0:
+            msg += "📢 VIX 17.0 초과 진입! (상승장 경계선 이탈, 변동성 주의)"
+        elif current_level == 18:
+            msg += "📢 VIX 18pt 도달 (횡보/변동성 확대 구간)"
+        elif current_level == 19:
+            msg += "⚠️ VIX 19pt 도달 (시장 경계 심화)"
+        elif current_level == 20:
+            msg += "🚨 VIX 20pt 도달 (하락장 경계선 진입 - RSI 매수 금지 가동)"
+        elif current_level == 21:
+            msg += "🚨 VIX 21pt 도달 (공포 심화, 추가 폭락 주의)"
+
+        send_telegram_msg(msg)
+        state["last_vix_level"] = current_level
+
+    return state
+
+
+# ==========================================
+# 6. 시장 국면 판정 로직
+# ==========================================
+def get_market_regime(ma20_up, fg_score, vix_score):
+    """
+    - 상승장: 20일선 우상향 AND 공탐지수 >= 60 AND VIX <= 17 (3가지 모두 충족)
+    - 횡보장: 3가지 중 2가지 이상 충족
+    - 하락장: 20일선 역배열 OR 공탐지수 <= 40 OR VIX >= 20 (1가지라도 충족)
+    """
+    if (
+        not ma20_up
+        or (fg_score and fg_score <= 40)
+        or (vix_score and vix_score >= 20)
+    ):
+        return "BEAR"
+
+    cond_ma = ma20_up
+    cond_fg = fg_score >= 60 if fg_score else False
+    cond_vix = vix_score <= 17 if vix_score else False
+
+    if cond_ma and cond_fg and cond_vix:
+        return "BULL"
+
+    return "RANGE"
+
+
+# ==========================================
+# 7. 메인 실행 루틴 (Main Loop)
+# ==========================================
+def run_trading_system():
+    print("=== 시스템 통합 점검 시작 ===")
+    state = load_alert_state()
+
+    # 1. 지표 수집
+    current_fg = get_fear_and_greed()
+    current_vix = get_vix_index()
+    ma20_up = False  # 기존 20일선 상태 수집 함수 연동
+
+    print(f"[현재 상태] 공탐지수: {current_fg}pt | VIX: {current_vix}")
+
+    # 2. 공탐지수 및 VIX 전용 마디가 알림 검사
+    state = check_fear_and_greed_alert(current_fg, state)
+    state = check_vix_alert(current_vix, state)
+    save_alert_state(state)
+
+    # 3. 시장 국면 판정
+    regime = get_market_regime(ma20_up, current_fg, current_vix)
+    print(f"[시장 국면] {regime}")
+
+    # 4. 5개 자산(QQQ, SOXX, DIA, VOO, BTC-USD) RSI 알림 검사
+    target_assets = ["QQQ", "SOXX", "DIA", "VOO", "BTC-USD"]
+    for asset in target_assets:
+        # 기존 check_rsi_alerts(asset, regime) 호출
+        pass
+
 
 if __name__ == "__main__":
-    threading.Thread(target=bot_loop, daemon=True).start()
-    
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    run_trading_system()
