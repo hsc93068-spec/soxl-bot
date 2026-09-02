@@ -14,6 +14,7 @@ os.environ["PYTHONUNBUFFERED"] = "1"
 # ==========================================
 STATE_FILE = "trading_bot_state.json"
 
+# ⚠️ 반드시 @BotFather에서 확인한 최신 올바른 토큰을 대입해 주세요.
 TELEGRAM_TOKEN = "8986570820:AAFfJht2Y02m21_T7SOvSfss0nPozDPTSpg"
 CHAT_ID = "1157818555"
 
@@ -53,7 +54,7 @@ def save_state(state):
         print(f"상태 저장 오류: {e}", flush=True)
 
 # ==========================================
-# 2. 데이터 수집 (CNN F&G 우회, VIX, 개별 20일선)
+# 2. 데이터 수집 (Yahoo 429 차단 방지 적용)
 # ==========================================
 def get_fear_and_greed():
     url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
@@ -73,7 +74,8 @@ def get_fear_and_greed():
 
 def get_vix_index():
     try:
-        vix = yf.Ticker("^VIX").history(period="1d")
+        ticker = yf.Ticker("^VIX")
+        vix = ticker.history(period="1d")
         if vix.empty:
             return 18.0
         return round(vix["Close"].iloc[-1], 2)
@@ -82,7 +84,8 @@ def get_vix_index():
 
 def check_individual_ma20_status(symbol):
     try:
-        df = yf.Ticker(symbol).history(period="3mo", interval="1d")
+        ticker = yf.Ticker(symbol)
+        df = ticker.history(period="3mo", interval="1d")
         if df.empty or len(df) < 20:
             return False, False
         df["MA20"] = df["Close"].rolling(20).mean()
@@ -190,7 +193,7 @@ def calculate_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 def process_rsi_rule(
-    ticker,
+    ticker_symbol,
     interval_name,
     timeframe,
     threshold_rsi,
@@ -200,8 +203,7 @@ def process_rsi_rule(
     state,
 ):
     try:
-        # 진행 중인 봉을 실시간 반영하기 위해 최신 봉 수집
-        df = yf.Ticker(ticker).history(period="5d", interval=timeframe)
+        df = yf.Ticker(ticker_symbol).history(period="5d", interval=timeframe)
         if df.empty or len(df) < 20:
             return state
 
@@ -209,16 +211,13 @@ def process_rsi_rule(
         current_rsi = round(df["RSI"].iloc[-1], 2)
         current_price = round(df["Close"].iloc[-1], 2)
 
-        # 최근 10개 봉(진행 중인 봉 포함) 중 최저 RSI
         recent_rsi_min = df["RSI"].tail(10).min()
 
-        # 과매도 구간 진입 확인
         if recent_rsi_min <= threshold_rsi:
             bounce = current_rsi - recent_rsi_min
 
-            # 설정한 반등 폭(+pt) 이상 반등하는 실시간 순간 포착
             if bounce >= bounce_pt and bounce < noise_limit:
-                history_key = f"{ticker}_{interval_name}"
+                history_key = f"{ticker_symbol}_{interval_name}"
                 history = state["rsi_history"].get(history_key, {})
 
                 last_alert_time = history.get("time", 0)
@@ -227,12 +226,11 @@ def process_rsi_rule(
                 now = time.time()
                 time_passed = (now - last_alert_time) / 60
 
-                # 60분 내 동일 최저점 인근 중복 알림 방지
                 if last_alert_time > 0 and time_passed <= 60:
                     if abs(recent_rsi_min - last_min_rsi) <= dup_limit:
                         return state
 
-                msg = f"🔔 [{ticker} RSI 실시간 반등 알림 ({interval_name})]\n"
+                msg = f"🔔 [{ticker_symbol} RSI 실시간 반등 알림 ({interval_name})]\n"
                 msg += f"• 현재가: ${current_price}\n"
                 msg += f"• 실시간 RSI: {current_rsi}pt\n"
                 msg += f"• 구간 최저 RSI: {round(recent_rsi_min, 2)}pt (반등: +{round(bounce, 2)}pt)"
@@ -245,7 +243,7 @@ def process_rsi_rule(
                 }
 
     except Exception as e:
-        print(f"[{ticker}] {interval_name} RSI 계산 오류: {e}", flush=True)
+        print(f"[{ticker_symbol}] {interval_name} RSI 계산 오류: {e}", flush=True)
 
     return state
 
@@ -292,11 +290,12 @@ def check_all_asset_rsi_alerts(fg_score, vix_score, state):
                 dup_limit=0.5,
                 state=state,
             )
+        time.sleep(1) # API 요청 과부하 방지 간격
 
     return state
 
 def run_trading_system():
-    print("=== [1분 실시간 감시] 시세 및 지표 점검 중 ===", flush=True)
+    print("=== [실시간 감시] 시세 및 지표 점검 중 ===", flush=True)
     state = load_state()
 
     current_fg = get_fear_and_greed()
@@ -309,10 +308,10 @@ def run_trading_system():
     save_state(state)
 
 # ==========================================
-# 6. 1분 간격 실시간 감시 루프
+# 6. 실시간 감시 루프 (야후 API 차단 방지 간격 조정)
 # ==========================================
 def worker_loop():
-    send_telegram_msg("🚀 [1분 실시간 감시 모드 전환 완료]\n진행 봉을 포함하여 사람이 감시하듯 1분마다 실시간 포착합니다.")
+    send_telegram_msg("🚀 [실시간 감시 모드 정상 작동 중]\n봇이 실시간 시세 감시를 다시 시작했습니다.")
     
     while True:
         try:
@@ -320,8 +319,8 @@ def worker_loop():
         except Exception as e:
             print(f"메인 루프 에러: {e}", flush=True)
         
-        # 1분(60초) 간격 실시간 감시
-        time.sleep(60)
+        # 야후 파이낸스 IP 차단을 피하기 위한 2분(120초) 간격 설정
+        time.sleep(120)
 
 t = Thread(target=worker_loop)
 t.daemon = True
