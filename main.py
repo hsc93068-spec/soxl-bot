@@ -30,7 +30,7 @@ Thread(target=run_flask).start()
 STATE_FILE = "trading_bot_state.json"
 
 TELEGRAM_TOKEN = "8986570820:AAFfJht2Y02m21_T7SOvSfss0nPozDPTSpg"
-CHAT_ID = "1157818555D"  # 사용 중이신 본인 챗 ID 숫자가 있다면 기입, 모르면 기존 동작대로 실행
+CHAT_ID = "1157818555D"  
 
 TARGET_ASSETS = ["QQQ", "SOXX", "DIA", "VOO", "BTC-USD"]
 
