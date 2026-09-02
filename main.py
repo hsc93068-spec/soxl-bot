@@ -15,7 +15,7 @@ os.environ["PYTHONUNBUFFERED"] = "1"
 STATE_FILE = "trading_bot_state.json"
 
 # ⚠️ 반드시 @BotFather에서 확인한 최신 올바른 토큰을 대입해 주세요.
-TELEGRAM_TOKEN = "8986570820:AAFfJht2Y02m21_T7SOvSfss0nPozDPTSpg"
+TELEGRAM_TOKEN = "8986570820:AAFfJht2Y02m21_T7SOvSfssOnPozDPTSpg"
 CHAT_ID = "1157818555"
 
 TARGET_ASSETS = ["QQQ", "SOXX", "DIA", "VOO", "BTC-USD"]
