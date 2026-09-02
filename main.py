@@ -1,10 +1,13 @@
-import json
 import os
-from threading import Thread
 import time
-from flask import Flask
+import json
 import requests
 import yfinance as yf
+from flask import Flask
+from threading import Thread
+
+# 콘솔 출력 버퍼링 해제 (Render 로그 즉시 출력)
+os.environ["PYTHONUNBUFFERED"] = "1"
 
 # ==========================================
 # 1. 기본 설정 및 텔레그램 발송 함수
@@ -16,21 +19,17 @@ CHAT_ID = "1157818555"
 
 TARGET_ASSETS = ["QQQ", "SOXX", "DIA", "VOO", "BTC-USD"]
 
-
 def send_telegram_msg(message):
-    print(f"[텔레그램 발송 시도]\n{message}\n")
+    print(f"[텔레그램 발송 시도]\n{message}\n", flush=True)
     if TELEGRAM_TOKEN and CHAT_ID:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         try:
             res = requests.post(
                 url, data={"chat_id": CHAT_ID, "text": message}, timeout=10
             )
-            print(
-                f"[텔레그램 응답] Status: {res.status_code} | Response: {res.text}"
-            )
+            print(f"[텔레그램 응답] Status: {res.status_code} | Response: {res.text}", flush=True)
         except Exception as e:
-            print(f"텔레그램 발송 오류: {e}")
-
+            print(f"텔레그램 발송 오류: {e}", flush=True)
 
 def load_state():
     default_state = {
@@ -46,14 +45,12 @@ def load_state():
             return default_state
     return default_state
 
-
 def save_state(state):
     try:
         with open(STATE_FILE, "w") as f:
             json.dump(state, f)
     except Exception as e:
-        print(f"상태 저장 오류: {e}")
-
+        print(f"상태 저장 오류: {e}", flush=True)
 
 # ==========================================
 # 2. 데이터 수집 (CNN F&G, VIX, 개별 20일선)
@@ -65,9 +62,8 @@ def get_fear_and_greed():
         res = requests.get(url, headers=headers, timeout=10)
         return round(res.json()["fear_and_greed"]["score"])
     except Exception as e:
-        print(f"[오류] 공탐지수 수집 실패: {e}")
+        print(f"[오류] 공탐지수 수집 실패: {e}", flush=True)
         return None
-
 
 def get_vix_index():
     try:
@@ -76,9 +72,8 @@ def get_vix_index():
             return None
         return round(vix["Close"].iloc[-1], 2)
     except Exception as e:
-        print(f"[오류] VIX 수집 실패: {e}")
+        print(f"[오류] VIX 수집 실패: {e}", flush=True)
         return None
-
 
 def check_individual_ma20_status(symbol):
     try:
@@ -91,9 +86,8 @@ def check_individual_ma20_status(symbol):
         is_upward = df["MA20"].iloc[-1] > df["MA20"].iloc[-2]
         return is_above, is_upward
     except Exception as e:
-        print(f"[{symbol}] MA20 수집 실패: {e}")
+        print(f"[{symbol}] MA20 수집 실패: {e}", flush=True)
         return False, False
-
 
 # ==========================================
 # 3. 공탐지수 & VIX 마디가 전용 알림
@@ -124,7 +118,6 @@ def check_fear_and_greed_alert(current_fg, state):
         state["last_fg_score"] = target_step
 
     return state
-
 
 def check_vix_alert(current_vix, state):
     if current_vix is None:
@@ -163,7 +156,6 @@ def check_vix_alert(current_vix, state):
 
     return state
 
-
 # ==========================================
 # 4. 개별 종목 기준 국면 판정 로직
 # ==========================================
@@ -183,7 +175,6 @@ def get_individual_regime(is_above, is_upward, fg_score, vix_score):
     else:
         return "BEAR"
 
-
 # ==========================================
 # 5. RSI 반등 알림 계산 및 필터링
 # ==========================================
@@ -193,7 +184,6 @@ def calculate_rsi(series, period=14):
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
     rs = gain / loss
     return 100 - (100 / (1 + rs))
-
 
 def process_rsi_rule(
     ticker,
@@ -246,10 +236,9 @@ def process_rsi_rule(
                 }
 
     except Exception as e:
-        print(f"[{ticker}] {interval_name} RSI 계산 오류: {e}")
+        print(f"[{ticker}] {interval_name} RSI 계산 오류: {e}", flush=True)
 
     return state
-
 
 def check_all_asset_rsi_alerts(fg_score, vix_score, state):
     for ticker in TARGET_ASSETS:
@@ -259,7 +248,8 @@ def check_all_asset_rsi_alerts(fg_score, vix_score, state):
         )
 
         print(
-            f"[{ticker}] 20일선 위: {is_above}, 우상향: {is_upward} -> 국면: {regime}"
+            f"[{ticker}] 20일선 위: {is_above}, 우상향: {is_upward} -> 국면: {regime}",
+            flush=True
         )
 
         if regime == "BEAR":
@@ -301,15 +291,14 @@ def check_all_asset_rsi_alerts(fg_score, vix_score, state):
 
     return state
 
-
 def run_trading_system():
-    print("=== 매매 및 개별 자산 점검 시작 ===")
+    print("=== 매매 및 개별 자산 점검 시작 ===", flush=True)
     state = load_state()
 
     current_fg = get_fear_and_greed()
     current_vix = get_vix_index()
 
-    print(f"[거시 지표] 공탐지수: {current_fg}pt | VIX: {current_vix}")
+    print(f"[거시 지표] 공탐지수: {current_fg}pt | VIX: {current_vix}", flush=True)
 
     state = check_fear_and_greed_alert(current_fg, state)
     state = check_vix_alert(current_vix, state)
@@ -317,43 +306,36 @@ def run_trading_system():
 
     save_state(state)
 
-
 # ==========================================
-# 6. 백그라운드 자동 가동 스레드
+# 6. 메인 실행 및 백그라운드 루프
 # ==========================================
-def start_bot_loop():
-    print("=== 알림 봇 백그라운드 가동 시작 ===")
+def worker_loop():
+    # 서버 켜지자마자 즉시 1회 실행 및 텔레그램 안내 발송
+    send_telegram_msg("🚀 [알림 봇 시스템 가동 시작]\n초기화 완료 및 점검을 시작합니다.")
+    
     while True:
         try:
             run_trading_system()
         except Exception as e:
-            print(f"메인 루프 에러: {e}")
-
+            print(f"메인 루프 에러: {e}", flush=True)
+        
+        # 15분 간격
         time.sleep(900)
 
-
-def send_init_msg():
-    time.sleep(3)
-    send_telegram_msg(
-        "🚀 [알림 봇 재가동 완료]\n조건 개수 기반(2개 이상 횡보장) 로직이 적용되었습니다."
-    )
-
-
-# 백그라운드 스레드 가동
-Thread(target=start_bot_loop, daemon=True).start()
-Thread(target=send_init_msg, daemon=True).start()
+# 백그라운드 스레드 시작
+t = Thread(target=worker_loop)
+t.daemon = True
+t.start()
 
 # ==========================================
-# 7. Render 웹서버 엔드포인트
+# 7. Render 바인딩용 Flask 웹서버
 # ==========================================
-app = Flask("")
-
+app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Bot is alive!"
-
+    return "Bot is running!"
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port, use_reloader=False)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
