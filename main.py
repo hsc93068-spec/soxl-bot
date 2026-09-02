@@ -1,26 +1,23 @@
-import json
 import os
-from threading import Thread
 import time
-from flask import Flask
+import json
 import requests
 import yfinance as yf
+from flask import Flask
+from threading import Thread
 
 # ==========================================
 # 1. Render 웹서버 (포트 감지용)
 # ==========================================
-app = Flask("")
+app = Flask('')
 
-
-@app.route("/")
+@app.route('/')
 def home():
     return "Bot is alive!"
 
-
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
-
+    app.run(host='0.0.0.0', port=port)
 
 Thread(target=run_flask).start()
 
@@ -30,30 +27,22 @@ Thread(target=run_flask).start()
 STATE_FILE = "trading_bot_state.json"
 
 TELEGRAM_TOKEN = "8986570820:AAFfJht2Y02m21_T7SOvSfss0nPozDPTSpg"
-CHAT_ID = "1157818555D"  
+CHAT_ID = "1157818555"  # 👈 본인의 텔레그램 챗 ID 숫자 입력
 
 TARGET_ASSETS = ["QQQ", "SOXX", "DIA", "VOO", "BTC-USD"]
 
-
 def send_telegram_msg(message):
     print(f"[텔레그램 발송 시도]\n{message}\n")
-    if TELEGRAM_TOKEN:
+    if TELEGRAM_TOKEN and CHAT_ID:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         try:
-            res = requests.post(
-                url, data={"chat_id": CHAT_ID, "text": message}, timeout=10
-            )
-            print(f"[텔레그램 응답] Status: {res.status_code}")
+            res = requests.post(url, data={"chat_id": CHAT_ID, "text": message}, timeout=10)
+            print(f"[텔레그램 응답] Status: {res.status_code} | Response: {res.text}")
         except Exception as e:
             print(f"텔레그램 발송 오류: {e}")
 
-
 def load_state():
-    default_state = {
-        "last_fg_score": 100,
-        "last_vix_level": 0,
-        "rsi_history": {},
-    }
+    default_state = {"last_fg_score": 100, "last_vix_level": 0, "rsi_history": {}}
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r") as f:
@@ -62,7 +51,6 @@ def load_state():
             return default_state
     return default_state
 
-
 def save_state(state):
     try:
         with open(STATE_FILE, "w") as f:
@@ -70,31 +58,28 @@ def save_state(state):
     except Exception as e:
         print(f"상태 저장 오류: {e}")
 
-
 # ==========================================
 # 3. 데이터 수집 (CNN F&G, VIX, 개별 20일선)
 # ==========================================
 def get_fear_and_greed():
     url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         res = requests.get(url, headers=headers, timeout=10)
-        return round(res.json()["fear_and_greed"]["score"])
+        return round(res.json()['fear_and_greed']['score'])
     except Exception as e:
         print(f"[오류] 공탐지수 수집 실패: {e}")
         return None
-
 
 def get_vix_index():
     try:
         vix = yf.Ticker("^VIX").history(period="1d")
         if vix.empty:
             return None
-        return round(vix["Close"].iloc[-1], 2)
+        return round(vix['Close'].iloc[-1], 2)
     except Exception as e:
         print(f"[오류] VIX 수집 실패: {e}")
         return None
-
 
 def check_individual_ma20_status(symbol):
     """해당 종목이 일봉 기준 20일선 위에 있고 20일선이 우상향하는지 개별 확인"""
@@ -102,15 +87,14 @@ def check_individual_ma20_status(symbol):
         df = yf.Ticker(symbol).history(period="3mo", interval="1d")
         if df.empty or len(df) < 20:
             return False, False
-        df["MA20"] = df["Close"].rolling(20).mean()
-
-        is_above = df["Close"].iloc[-1] > df["MA20"].iloc[-1]
-        is_upward = df["MA20"].iloc[-1] > df["MA20"].iloc[-2]
+        df['MA20'] = df['Close'].rolling(20).mean()
+        
+        is_above = df['Close'].iloc[-1] > df['MA20'].iloc[-1]
+        is_upward = df['MA20'].iloc[-1] > df['MA20'].iloc[-2]
         return is_above, is_upward
     except Exception as e:
         print(f"[{symbol}] MA20 수집 실패: {e}")
         return False, False
-
 
 # ==========================================
 # 4. 공탐지수 & VIX 마디가 전용 알림
@@ -119,15 +103,15 @@ def check_fear_and_greed_alert(current_fg, state):
     if current_fg is None:
         return state
     last_fg = state.get("last_fg_score", 100)
-
+    
     if current_fg > 60:
         state["last_fg_score"] = 100
         return state
-
+        
     if current_fg <= 60 and (last_fg - current_fg) >= 5:
         target_step = (current_fg // 5) * 5
         msg = f"🚨 [공포지수 하향 돌파 알림]\n• 현재 공탐지수: {current_fg}pt (단계: {target_step}pt 이하)\n\n"
-
+        
         if current_fg <= 10:
             msg += "🔥 [대바닥 3차] 지표 무관 총 투자금 추가 10% (누적 30%) 진입!"
         elif current_fg <= 20:
@@ -136,32 +120,31 @@ def check_fear_and_greed_alert(current_fg, state):
             msg += "📢 [공포 진입 1차] 지표 무관 총 투자금 10% 1차 진입!"
         else:
             msg += "⛔ 하락/관망 구간 (일반 RSI 매수 금지 유지)"
-
+            
         send_telegram_msg(msg)
         state["last_fg_score"] = target_step
-
+        
     return state
-
 
 def check_vix_alert(current_vix, state):
     if current_vix is None:
         return state
     last_vix_level = state.get("last_vix_level", 0)
-
+    
     if current_vix <= 17.0:
         if last_vix_level != 0:
             state["last_vix_level"] = 0
         return state
-
+        
     if current_vix >= 22.0:
         state["last_vix_level"] = 22
         return state
-
+        
     current_level = int(current_vix)
-
+    
     if current_level != last_vix_level:
         msg = f"⚠️ [VIX 변동성 마디가 알림]\n• 현재 VIX: {current_vix:.2f} (마디가: {current_level}pt대)\n\n"
-
+        
         if current_level == 17 and last_vix_level == 0:
             msg += "📢 VIX 17.0 초과 진입! (상승장 경계선 이탈, 변동성 주의)"
         elif current_level == 18:
@@ -174,12 +157,11 @@ def check_vix_alert(current_vix, state):
             msg += "🚨 VIX 21pt 도달 (공포 심화, 추가 폭락 주의)"
         elif last_vix_level == 22 and current_level == 21:
             msg += "🔄 VIX 22pt 미만으로 복귀 (극단 공포 소폭 완화)"
-
+            
         send_telegram_msg(msg)
         state["last_vix_level"] = current_level
-
+        
     return state
-
 
 # ==========================================
 # 5. 개별 종목 기준 국면 판정 로직 (조건 개수 기반)
@@ -188,9 +170,9 @@ def get_individual_regime(is_above, is_upward, fg_score, vix_score):
     cond_ma20 = is_above and is_upward
     cond_fg = (fg_score >= 50) if fg_score is not None else False
     cond_vix = (vix_score <= 20) if vix_score is not None else False
-
+    
     score = int(cond_ma20) + int(cond_fg) + int(cond_vix)
-
+    
     if score == 3:
         if (fg_score and fg_score >= 60) and (vix_score and vix_score <= 17):
             return "BULL"
@@ -199,7 +181,6 @@ def get_individual_regime(is_above, is_upward, fg_score, vix_score):
         return "RANGE"
     else:
         return "BEAR"
-
 
 # ==========================================
 # 6. 알람 1, 2, 3 세부 RSI 반등 계산 및 필터
@@ -211,113 +192,70 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-
-def process_rsi_rule(
-    ticker,
-    interval_name,
-    timeframe,
-    threshold_rsi,
-    bounce_pt,
-    noise_limit,
-    dup_limit,
-    state,
-):
+def process_rsi_rule(ticker, interval_name, timeframe, threshold_rsi, bounce_pt, noise_limit, dup_limit, state):
     try:
         df = yf.Ticker(ticker).history(period="5d", interval=timeframe)
         if df.empty or len(df) < 20:
             return state
-
-        df["RSI"] = calculate_rsi(df["Close"])
-        current_rsi = round(df["RSI"].iloc[-1], 2)
-        current_price = round(df["Close"].iloc[-1], 2)
-
-        recent_rsi_min = df["RSI"].tail(10).min()
-
+            
+        df['RSI'] = calculate_rsi(df['Close'])
+        current_rsi = round(df['RSI'].iloc[-1], 2)
+        current_price = round(df['Close'].iloc[-1], 2)
+        
+        recent_rsi_min = df['RSI'].tail(10).min()
+        
         if recent_rsi_min <= threshold_rsi:
             bounce = current_rsi - recent_rsi_min
-
+            
             if bounce >= bounce_pt and bounce < noise_limit:
                 history_key = f"{ticker}_{interval_name}"
                 history = state["rsi_history"].get(history_key, {})
-
+                
                 last_alert_time = history.get("time", 0)
                 last_min_rsi = history.get("min_rsi", -999)
-
+                
                 now = time.time()
                 time_passed = (now - last_alert_time) / 60
-
+                
                 if last_alert_time > 0 and time_passed <= 60:
                     if abs(recent_rsi_min - last_min_rsi) <= dup_limit:
                         return state
-
+                
                 msg = f"🔔 [{ticker} RSI 반등 알림 ({interval_name})]\n"
                 msg += f"• 현재가: ${current_price}\n"
                 msg += f"• 현재 RSI: {current_rsi}pt\n"
                 msg += f"• 구간 최저 RSI: {round(recent_rsi_min, 2)}pt (반등: +{round(bounce, 2)}pt)"
-
+                
                 send_telegram_msg(msg)
-
+                
                 state["rsi_history"][history_key] = {
                     "time": now,
-                    "min_rsi": recent_rsi_min,
+                    "min_rsi": recent_rsi_min
                 }
-
+                
     except Exception as e:
         print(f"[{ticker}] {interval_name} RSI 계산 오류: {e}")
-
+        
     return state
-
 
 def check_all_asset_rsi_alerts(fg_score, vix_score, state):
     for ticker in TARGET_ASSETS:
         is_above, is_upward = check_individual_ma20_status(ticker)
-        regime = get_individual_regime(
-            is_above, is_upward, fg_score, vix_score
-        )
-
-        print(
-            f"[{ticker}] 20일선 위: {is_above}, 우상향: {is_upward} -> 국면: {regime}"
-        )
-
+        regime = get_individual_regime(is_above, is_upward, fg_score, vix_score)
+        
+        print(f"[{ticker}] 20일선 위: {is_above}, 우상향: {is_upward} -> 국면: {regime}")
+        
         if regime == "BEAR":
             continue
-
+            
         if regime == "BULL":
-            state = process_rsi_rule(
-                ticker,
-                "15분봉",
-                "15m",
-                threshold_rsi=30,
-                bounce_pt=4,
-                noise_limit=10,
-                dup_limit=2.0,
-                state=state,
-            )
-
+            state = process_rsi_rule(ticker, "15분봉", "15m", threshold_rsi=30, bounce_pt=4, noise_limit=10, dup_limit=2.0, state=state)
+            
         elif regime == "RANGE":
-            state = process_rsi_rule(
-                ticker,
-                "30분봉",
-                "30m",
-                threshold_rsi=33,
-                bounce_pt=3,
-                noise_limit=10,
-                dup_limit=1.0,
-                state=state,
-            )
-            state = process_rsi_rule(
-                ticker,
-                "60분봉",
-                "60m",
-                threshold_rsi=36,
-                bounce_pt=2,
-                noise_limit=10,
-                dup_limit=0.5,
-                state=state,
-            )
-
+            state = process_rsi_rule(ticker, "30분봉", "30m", threshold_rsi=33, bounce_pt=3, noise_limit=10, dup_limit=1.0, state=state)
+            state = process_rsi_rule(ticker, "60분봉", "60m", threshold_rsi=36, bounce_pt=2, noise_limit=10, dup_limit=0.5, state=state)
+            
     return state
-
 
 # ==========================================
 # 7. 통합 메인 실행 루틴
@@ -325,34 +263,31 @@ def check_all_asset_rsi_alerts(fg_score, vix_score, state):
 def run_trading_system():
     print("=== 매매 및 개별 자산 점검 시작 ===")
     state = load_state()
-
+    
     current_fg = get_fear_and_greed()
     current_vix = get_vix_index()
-
+    
     print(f"[거시 지표] 공탐지수: {current_fg}pt | VIX: {current_vix}")
-
+    
     state = check_fear_and_greed_alert(current_fg, state)
     state = check_vix_alert(current_vix, state)
     state = check_all_asset_rsi_alerts(current_fg, current_vix, state)
-
+    
     save_state(state)
-
 
 # ==========================================
 # 8. 백그라운드 무한 루프 실행
 # ==========================================
 if __name__ == "__main__":
     print("=== 알림 봇 가동 시작 ===")
-
+    
     time.sleep(3)
-    send_telegram_msg(
-        "🚀 [알림 봇 재가동 완료]\n조건 개수 기반(2개 이상 횡보장) 로직이 적용되었습니다."
-    )
-
+    send_telegram_msg("🚀 [알림 봇 재가동 완료]\n조건 개수 기반(2개 이상 횡보장) 로직이 적용되었습니다.")
+    
     while True:
         try:
             run_trading_system()
         except Exception as e:
             print(f"메인 루프 에러: {e}")
-
+            
         time.sleep(900)
