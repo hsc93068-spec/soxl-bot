@@ -30,15 +30,14 @@ Thread(target=run_flask).start()
 STATE_FILE = "trading_bot_state.json"
 
 # ⚠️ 본인의 실제 텔레그램 토큰과 CHAT ID를 입력하세요.
-TELEGRAM_TOKEN = "8986570820:AAFfJht2Y02m21_T7SOvSfssOnPozDPTSpg"
-CHAT_ID = "1157818555"
+TELEGRAM_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"
 
 TARGET_ASSETS = ["QQQ", "SOXX", "DIA", "VOO", "BTC-USD"]
 
 
 def send_telegram_msg(message):
     print(f"[텔레그램 발송 시도]\n{message}\n")
-    # 토큰이 기본값이 아니고 실제 입력되어 있을 때만 발송
     if TELEGRAM_TOKEN and TELEGRAM_TOKEN != "YOUR_TELEGRAM_BOT_TOKEN":
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         try:
@@ -78,7 +77,7 @@ def save_state(state):
 
 
 # ==========================================
-# 3. 데이터 수집 (CNN F&G, VIX, 20일선)
+# 3. 데이터 수집 (CNN F&G, VIX, 개별 20일선)
 # ==========================================
 def get_fear_and_greed():
     url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
@@ -102,8 +101,8 @@ def get_vix_index():
         return None
 
 
-def check_ma20_status(symbol="QQQ"):
-    """QQQ 일봉 기준 20일선 위에 있고 20일선이 우상향하는지 확인"""
+def check_individual_ma20_status(symbol):
+    """해당 종목이 일봉 기준 20일선 위에 있고 20일선이 우상향하는지 개별 확인"""
     try:
         df = yf.Ticker(symbol).history(period="3mo", interval="1d")
         if df.empty or len(df) < 20:
@@ -114,7 +113,7 @@ def check_ma20_status(symbol="QQQ"):
         is_upward = df["MA20"].iloc[-1] > df["MA20"].iloc[-2]
         return is_above, is_upward
     except Exception as e:
-        print(f"[오류] MA20 수집 실패: {e}")
+        print(f"[{symbol}] MA20 수집 실패: {e}")
         return False, False
 
 
@@ -188,12 +187,12 @@ def check_vix_alert(current_vix, state):
 
 
 # ==========================================
-# 5. 시장 국면 판정 로직
+# 5. 개별 종목 기준 국면 판정 로직
 # ==========================================
-def get_market_regime(is_above, is_upward, fg_score, vix_score):
+def get_individual_regime(is_above, is_upward, fg_score, vix_score):
     ma20_cond = is_above and is_upward
 
-    # 하락장 (1가지라도 충족 시 즉시 매수 금지 하락장)
+    # 거시 지표 하락장 신호 또는 해당 종목이 20일선 밑이면 하락장(BEAR)
     if (
         (not ma20_cond)
         or (fg_score is not None and fg_score <= 40)
@@ -201,13 +200,13 @@ def get_market_regime(is_above, is_upward, fg_score, vix_score):
     ):
         return "BEAR"
 
-    # 상승장 (3가지 모두 충족 시)
+    # 상승장 (20일선 조건 + 공탐 60 이상 + VIX 17 이하)
     cond_fg_bull = (fg_score >= 60) if fg_score is not None else False
     cond_vix_bull = (vix_score <= 17) if vix_score is not None else False
     if ma20_cond and cond_fg_bull and cond_vix_bull:
         return "BULL"
 
-    # 횡보장 (3가지 중 2가지 이상 충족 시)
+    # 횡보장 (3가지 조건 중 2가지 이상 충족)
     cond_fg_range = (fg_score >= 50) if fg_score is not None else False
     cond_vix_range = (vix_score <= 20) if vix_score is not None else False
 
@@ -240,7 +239,6 @@ def process_rsi_rule(
     state,
 ):
     try:
-        # 실시간 진행 봉 포함하여 최근 봉 데이터 수집
         df = yf.Ticker(ticker).history(period="5d", interval=timeframe)
         if df.empty or len(df) < 20:
             return state
@@ -249,14 +247,11 @@ def process_rsi_rule(
         current_rsi = round(df["RSI"].iloc[-1], 2)
         current_price = round(df["Close"].iloc[-1], 2)
 
-        # 최근 10개 봉 중 RSI 최저점 검색
         recent_rsi_min = df["RSI"].tail(10).min()
 
-        # 1. 기준 RSI 이하 진입 이력이 있는지 확인
         if recent_rsi_min <= threshold_rsi:
             bounce = current_rsi - recent_rsi_min
 
-            # 2. 반등 조건 달성 & 최저점 대비 10pt 이상 과도한 반등 차단
             if bounce >= bounce_pt and bounce < noise_limit:
                 history_key = f"{ticker}_{interval_name}"
                 history = state["rsi_history"].get(history_key, {})
@@ -265,14 +260,12 @@ def process_rsi_rule(
                 last_min_rsi = history.get("min_rsi", -999)
 
                 now = time.time()
-                time_passed = (now - last_alert_time) / 60  # 분 단위
+                time_passed = (now - last_alert_time) / 60
 
-                # 3. 최근 60분 이내 중복 방지 필터링
                 if last_alert_time > 0 and time_passed <= 60:
                     if abs(recent_rsi_min - last_min_rsi) <= dup_limit:
-                        return state  # 중복 조건 걸려서 스키프
+                        return state
 
-                # 알림 메시지 생성 및 발송
                 msg = f"🔔 [{ticker} RSI 반등 알림 ({interval_name})]\n"
                 msg += f"• 현재가: ${current_price}\n"
                 msg += f"• 현재 RSI: {current_rsi}pt\n"
@@ -280,7 +273,6 @@ def process_rsi_rule(
 
                 send_telegram_msg(msg)
 
-                # 상태 업데이트
                 state["rsi_history"][history_key] = {
                     "time": now,
                     "min_rsi": recent_rsi_min,
@@ -292,13 +284,23 @@ def process_rsi_rule(
     return state
 
 
-def check_all_asset_rsi_alerts(regime, state):
-    # 하락장(BEAR)일 경우 모든 일반 RSI 알림 일체 무시
-    if regime == "BEAR":
-        return state
-
+def check_all_asset_rsi_alerts(fg_score, vix_score, state):
     for ticker in TARGET_ASSETS:
-        # 상승장일 때: 알람1 (15분봉) 가동
+        # 개별 종목의 20일선 상태 판정
+        is_above, is_upward = check_individual_ma20_status(ticker)
+        regime = get_individual_regime(
+            is_above, is_upward, fg_score, vix_score
+        )
+
+        print(
+            f"[{ticker}] 20일선 위: {is_above}, 우상향: {is_upward} -> 국면: {regime}"
+        )
+
+        # 개별 종목이 하락장(BEAR) 판정이면 해당 종목 알림만 스킵
+        if regime == "BEAR":
+            continue
+
+        # 해당 종목이 상승장일 때: 알람1 (15분봉) 가동
         if regime == "BULL":
             state = process_rsi_rule(
                 ticker,
@@ -311,7 +313,7 @@ def check_all_asset_rsi_alerts(regime, state):
                 state=state,
             )
 
-        # 횡보장일 때: 알람2 (30분봉) 및 알람3 (60분봉) 가동
+        # 해당 종목이 횡보장일 때: 알람2 (30분봉) 및 알람3 (60분봉) 가동
         elif regime == "RANGE":
             state = process_rsi_rule(
                 ticker,
@@ -341,28 +343,21 @@ def check_all_asset_rsi_alerts(regime, state):
 # 7. 통합 메인 실행 루틴
 # ==========================================
 def run_trading_system():
-    print("=== 매매 및 마크로 스위치 점검 시작 ===")
+    print("=== 매매 및 개별 자산 점검 시작 ===")
     state = load_state()
 
-    # 1. 지표 데이터 수집
+    # 1. 거시 지표 데이터 수집
     current_fg = get_fear_and_greed()
     current_vix = get_vix_index()
-    is_above, is_upward = check_ma20_status("QQQ")
 
-    print(
-        f"[지표 분석] 공탐지수: {current_fg}pt | VIX: {current_vix} | 20일선 위: {is_above}, 우상향: {is_upward}"
-    )
+    print(f"[거시 지표] 공탐지수: {current_fg}pt | VIX: {current_vix}")
 
     # 2. 공탐지수 / VIX 마디가 전용 알림
     state = check_fear_and_greed_alert(current_fg, state)
     state = check_vix_alert(current_vix, state)
 
-    # 3. 시장 국면 판정 (BULL / RANGE / BEAR)
-    regime = get_market_regime(is_above, is_upward, current_fg, current_vix)
-    print(f"[현재 시장 국면] {regime}")
-
-    # 4. 개별 자산 RSI 알림 규칙 검사 (하락장 시 자동 차단)
-    state = check_all_asset_rsi_alerts(regime, state)
+    # 3. 개별 자산별 20일선 감시 및 RSI 알림 검사
+    state = check_all_asset_rsi_alerts(current_fg, current_vix, state)
 
     # 상태 저장
     save_state(state)
@@ -374,9 +369,8 @@ def run_trading_system():
 if __name__ == "__main__":
     print("=== 알림 봇 가동 시작 ===")
 
-    # 서버 부팅 즉시 무조건 시작 알림 1회 전송
     send_telegram_msg(
-        "🚀 [알림 봇 재가동 완료]\nRender 서버 연결 성공. 알람 1/2/3 규칙 및 마크로 스위치가 통합 탑재되었습니다."
+        "🚀 [알림 봇 재가동 완료]\n개별 종목 20일선 감시 모드로 보완 적용되었습니다."
     )
 
     while True:
