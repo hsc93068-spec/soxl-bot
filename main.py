@@ -43,3 +43,20 @@ def check_vix_alert(current_vix, state):
         state["last_vix_level"] = current_level
 
     return state
+import time
+
+# ... (기존 함수들 모두 그대로 유지) ...
+
+if __name__ == "__main__":
+    print("=== 트레이딩 알림 봇 24시간 가동 시작 ===")
+    
+    while True:
+        try:
+            # 1. 봇 메인 로직 1회 실행
+            run_trading_system()
+        except Exception as e:
+            print(f"실행 중 에러 발생: {e}")
+        
+        # 2. 15분(900초) 대기 후 다시 루프 돌기 (원하는 주기로 초 단위 변경)
+        print("15분 대기 후 다음 체크를 진행합니다...\n")
+        time.sleep(900)
