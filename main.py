@@ -1,21 +1,20 @@
-import json
 import os
-from threading import Thread
 import time
-from flask import Flask
+import json
 import requests
 import yfinance as yf
+from flask import Flask
+from threading import Thread
 
 # ==========================================
-# 1. 기본 설정 및 텔레그램 함수
+# 1. 기본 설정 및 텔레그램 발송 함수
 # ==========================================
 STATE_FILE = "trading_bot_state.json"
 
 TELEGRAM_TOKEN = "8986570820:AAFfJht2Y02m21_T7SOvSfss0nPozDPTSpg"
-CHAT_ID = "1157818555"  # 👈 본인의 텔레그램 챗 ID 숫자 입력 (예: "123456789")
+CHAT_ID = "1157818555"
 
 TARGET_ASSETS = ["QQQ", "SOXX", "DIA", "VOO", "BTC-USD"]
-
 
 def send_telegram_msg(message):
     print(f"[텔레그램 발송 시도]\n{message}\n")
@@ -25,12 +24,9 @@ def send_telegram_msg(message):
             res = requests.post(
                 url, data={"chat_id": CHAT_ID, "text": message}, timeout=10
             )
-            print(
-                f"[텔레그램 응답] Status: {res.status_code} | Response: {res.text}"
-            )
+            print(f"[텔레그램 응답] Status: {res.status_code} | Response: {res.text}")
         except Exception as e:
             print(f"텔레그램 발송 오류: {e}")
-
 
 def load_state():
     default_state = {
@@ -46,14 +42,12 @@ def load_state():
             return default_state
     return default_state
 
-
 def save_state(state):
     try:
         with open(STATE_FILE, "w") as f:
             json.dump(state, f)
     except Exception as e:
         print(f"상태 저장 오류: {e}")
-
 
 # ==========================================
 # 2. 데이터 수집 (CNN F&G, VIX, 개별 20일선)
@@ -68,7 +62,6 @@ def get_fear_and_greed():
         print(f"[오류] 공탐지수 수집 실패: {e}")
         return None
 
-
 def get_vix_index():
     try:
         vix = yf.Ticker("^VIX").history(period="1d")
@@ -78,7 +71,6 @@ def get_vix_index():
     except Exception as e:
         print(f"[오류] VIX 수집 실패: {e}")
         return None
-
 
 def check_individual_ma20_status(symbol):
     """해당 종목이 일봉 기준 20일선 위에 있고 20일선이 우상향하는지 개별 확인"""
@@ -94,7 +86,6 @@ def check_individual_ma20_status(symbol):
     except Exception as e:
         print(f"[{symbol}] MA20 수집 실패: {e}")
         return False, False
-
 
 # ==========================================
 # 3. 공탐지수 & VIX 마디가 전용 알림
@@ -125,7 +116,6 @@ def check_fear_and_greed_alert(current_fg, state):
         state["last_fg_score"] = target_step
 
     return state
-
 
 def check_vix_alert(current_vix, state):
     if current_vix is None:
@@ -164,7 +154,6 @@ def check_vix_alert(current_vix, state):
 
     return state
 
-
 # ==========================================
 # 4. 개별 종목 기준 국면 판정 로직
 # ==========================================
@@ -184,9 +173,8 @@ def get_individual_regime(is_above, is_upward, fg_score, vix_score):
     else:
         return "BEAR"
 
-
 # ==========================================
-# 5. 알람 RSI 반등 계산 및 필터
+# 5. RSI 반등 알림 계산 및 필터링
 # ==========================================
 def calculate_rsi(series, period=14):
     delta = series.diff()
@@ -194,7 +182,6 @@ def calculate_rsi(series, period=14):
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
     rs = gain / loss
     return 100 - (100 / (1 + rs))
-
 
 def process_rsi_rule(
     ticker,
@@ -251,7 +238,6 @@ def process_rsi_rule(
 
     return state
 
-
 def check_all_asset_rsi_alerts(fg_score, vix_score, state):
     for ticker in TARGET_ASSETS:
         is_above, is_upward = check_individual_ma20_status(ticker)
@@ -302,7 +288,6 @@ def check_all_asset_rsi_alerts(fg_score, vix_score, state):
 
     return state
 
-
 def run_trading_system():
     print("=== 매매 및 개별 자산 점검 시작 ===")
     state = load_state()
@@ -318,13 +303,12 @@ def run_trading_system():
 
     save_state(state)
 
-
 # ==========================================
-# 6. 백그라운드 무한 루프 스레드
+# 6. 백그라운드 자동 가동 스레드
 # ==========================================
 def start_bot_loop():
     print("=== 알림 봇 백그라운드 가동 시작 ===")
-    time.sleep(3)
+    time.sleep(2)
     send_telegram_msg(
         "🚀 [알림 봇 재가동 완료]\n조건 개수 기반(2개 이상 횡보장) 로직이 적용되었습니다."
     )
@@ -337,20 +321,17 @@ def start_bot_loop():
 
         time.sleep(900)
 
+# 백그라운드 스레드 강제 즉시 실행 (Render/Gunicorn 환경 호환)
+Thread(target=start_bot_loop, daemon=True).start()
 
 # ==========================================
-# 7. Render 웹서버 및 자동 실행 시작점
+# 7. Render 웹서버 엔드포인트
 # ==========================================
 app = Flask("")
-
 
 @app.route("/")
 def home():
     return "Bot is alive!"
-
-
-# 웹서버 모듈이 로드될 때 바로 백그라운드 감시 스레드 시작
-Thread(target=start_bot_loop, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
