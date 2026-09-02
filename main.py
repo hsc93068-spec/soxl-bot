@@ -369,6 +369,8 @@ def run_trading_system():
 if __name__ == "__main__":
     print("=== 알림 봇 가동 시작 ===")
 
+    # 서버 부팅 안정화를 위해 3초 대기 후 시작 알림 발송
+    time.sleep(3)
     send_telegram_msg(
         "🚀 [알림 봇 재가동 완료]\n개별 종목 20일선 감시 모드로 보완 적용되었습니다."
     )
@@ -379,4 +381,5 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"메인 루프 에러: {e}")
 
-        time.sleep(900)  # 15분마다 루프
+        # 야후 파이낸스 API 차단 방지를 위해 15분 대기
+        time.sleep(900)
