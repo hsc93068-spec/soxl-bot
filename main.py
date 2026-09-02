@@ -30,8 +30,8 @@ Thread(target=run_flask).start()
 STATE_FILE = "trading_bot_state.json"
 
 # ⚠️ 본인의 실제 텔레그램 토큰과 CHAT ID를 입력하세요.
-TELEGRAM_TOKEN = 8986570820:AAFfJht2Y02m21_T7SOvSfssOnPozDPTSpg
-CHAT_ID = 1157818555
+TELEGRAM_TOKEN = "8986570820:AAFfJht2Y02m21_T7SOvSfssOnPozDPTSpg"
+CHAT_ID = "1157818555"
 
 TARGET_ASSETS = ["QQQ", "SOXX", "DIA", "VOO", "BTC-USD"]
 
