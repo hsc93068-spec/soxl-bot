@@ -28,27 +28,37 @@ Thread(target=run_flask).start()
 # 2. 기본 설정 및 텔레그램 함수
 # ==========================================
 STATE_FILE = "trading_bot_state.json"
-TELEGRAM_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"  # 본인 텔레그램 토큰
-CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"  # 본인 텔레그램 챗 ID
+
+# ⚠️ 본인의 실제 텔레그램 토큰과 CHAT ID를 입력하세요.
+TELEGRAM_TOKEN = 8986570820:AAFfJht2Y02m21_T7SOvSfssOnPozDPTSpg
+CHAT_ID = 1157818555
 
 TARGET_ASSETS = ["QQQ", "SOXX", "DIA", "VOO", "BTC-USD"]
 
 
 def send_telegram_msg(message):
-    print(f"[텔레그램 발송]\n{message}\n")
-    if TELEGRAM_TOKEN != "YOUR_TELEGRAM_BOT_TOKEN":
+    print(f"[텔레그램 발송 시도]\n{message}\n")
+    # 토큰이 기본값이 아니고 실제 입력되어 있을 때만 발송
+    if TELEGRAM_TOKEN and TELEGRAM_TOKEN != "YOUR_TELEGRAM_BOT_TOKEN":
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         try:
-            requests.post(url, data={"chat_id": CHAT_ID, "text": message})
+            res = requests.post(
+                url, data={"chat_id": CHAT_ID, "text": message}, timeout=10
+            )
+            print(f"[텔레그램 응답] Status: {res.status_code}")
         except Exception as e:
             print(f"텔레그램 발송 오류: {e}")
+    else:
+        print(
+            "⚠️ TELEGRAM_TOKEN 또는 CHAT_ID가 설정되지 않아 발송을 스킵합니다."
+        )
 
 
 def load_state():
     default_state = {
         "last_fg_score": 100,
         "last_vix_level": 0,
-        "rsi_history": {},  # 각 자산별/타임프레임별 최근 알림 내역 저장
+        "rsi_history": {},
     }
     if os.path.exists(STATE_FILE):
         try:
@@ -60,8 +70,11 @@ def load_state():
 
 
 def save_state(state):
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f)
+    try:
+        with open(STATE_FILE, "w") as f:
+            json.dump(state, f)
+    except Exception as e:
+        print(f"상태 저장 오류: {e}")
 
 
 # ==========================================
@@ -81,6 +94,8 @@ def get_fear_and_greed():
 def get_vix_index():
     try:
         vix = yf.Ticker("^VIX").history(period="1d")
+        if vix.empty:
+            return None
         return round(vix["Close"].iloc[-1], 2)
     except Exception as e:
         print(f"[오류] VIX 수집 실패: {e}")
@@ -91,7 +106,7 @@ def check_ma20_status(symbol="QQQ"):
     """QQQ 일봉 기준 20일선 위에 있고 20일선이 우상향하는지 확인"""
     try:
         df = yf.Ticker(symbol).history(period="3m", interval="1d")
-        if len(df) < 20:
+        if df.empty or len(df) < 20:
             return False, False
         df["MA20"] = df["Close"].rolling(20).mean()
 
@@ -181,20 +196,20 @@ def get_market_regime(is_above, is_upward, fg_score, vix_score):
     # 하락장 (1가지라도 충족 시 즉시 매수 금지 하락장)
     if (
         (not ma20_cond)
-        or (fg_score and fg_score <= 40)
-        or (vix_score and vix_score >= 20)
+        or (fg_score is not None and fg_score <= 40)
+        or (vix_score is not None and vix_score >= 20)
     ):
         return "BEAR"
 
     # 상승장 (3가지 모두 충족 시)
-    cond_fg_bull = fg_score >= 60 if fg_score else False
-    cond_vix_bull = vix_score <= 17 if vix_score else False
+    cond_fg_bull = (fg_score >= 60) if fg_score is not None else False
+    cond_vix_bull = (vix_score <= 17) if vix_score is not None else False
     if ma20_cond and cond_fg_bull and cond_vix_bull:
         return "BULL"
 
     # 횡보장 (3가지 중 2가지 이상 충족 시)
-    cond_fg_range = fg_score >= 50 if fg_score else False
-    cond_vix_range = vix_score <= 20 if vix_score else False
+    cond_fg_range = (fg_score >= 50) if fg_score is not None else False
+    cond_vix_range = (vix_score <= 20) if vix_score is not None else False
 
     score = int(ma20_cond) + int(cond_fg_range) + int(cond_vix_range)
     if score >= 2:
@@ -226,8 +241,8 @@ def process_rsi_rule(
 ):
     try:
         # 실시간 진행 봉 포함하여 최근 봉 데이터 수집
-        df = yf.Ticker(ticker).history(period="3d", interval=timeframe)
-        if len(df) < 20:
+        df = yf.Ticker(ticker).history(period="5d", interval=timeframe)
+        if df.empty or len(df) < 20:
             return state
 
         df["RSI"] = calculate_rsi(df["Close"])
@@ -239,7 +254,6 @@ def process_rsi_rule(
 
         # 1. 기준 RSI 이하 진입 이력이 있는지 확인
         if recent_rsi_min <= threshold_rsi:
-            # 반등 폭 계산
             bounce = current_rsi - recent_rsi_min
 
             # 2. 반등 조건 달성 & 최저점 대비 10pt 이상 과도한 반등 차단
@@ -256,7 +270,7 @@ def process_rsi_rule(
                 # 3. 최근 60분 이내 중복 방지 필터링
                 if last_alert_time > 0 and time_passed <= 60:
                     if abs(recent_rsi_min - last_min_rsi) <= dup_limit:
-                        return state  # 중복 조건 걸려서 알림 캔슬
+                        return state  # 중복 조건 걸려서 스키프
 
                 # 알림 메시지 생성 및 발송
                 msg = f"🔔 [{ticker} RSI 반등 알림 ({interval_name})]\n"
@@ -360,6 +374,7 @@ def run_trading_system():
 if __name__ == "__main__":
     print("=== 알림 봇 가동 시작 ===")
 
+    # 서버 부팅 즉시 무조건 시작 알림 1회 전송
     send_telegram_msg(
         "🚀 [알림 봇 재가동 완료]\nRender 서버 연결 성공. 알람 1/2/3 규칙 및 마크로 스위치가 통합 탑재되었습니다."
     )
