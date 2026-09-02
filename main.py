@@ -29,16 +29,15 @@ Thread(target=run_flask).start()
 # ==========================================
 STATE_FILE = "trading_bot_state.json"
 
-# ⚠️ 본인의 실제 텔레그램 토큰과 CHAT ID를 입력하세요.
-TELEGRAM_TOKEN = "8986570820:AAFfJht2Y02m21_T7SOvSfssOnPozDPTSpg"
-CHAT_ID = "1157818555"
+TELEGRAM_TOKEN = "8986570820:AAFfJht2Y02m21_T7SOvSfss0nPozDPTSpg"
+CHAT_ID = "YOUR_CHAT_ID"  # 사용 중이신 본인 챗 ID 숫자가 있다면 기입, 모르면 기존 동작대로 실행
 
 TARGET_ASSETS = ["QQQ", "SOXX", "DIA", "VOO", "BTC-USD"]
 
 
 def send_telegram_msg(message):
     print(f"[텔레그램 발송 시도]\n{message}\n")
-    if TELEGRAM_TOKEN and TELEGRAM_TOKEN != "YOUR_TELEGRAM_BOT_TOKEN":
+    if TELEGRAM_TOKEN:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         try:
             res = requests.post(
@@ -47,10 +46,6 @@ def send_telegram_msg(message):
             print(f"[텔레그램 응답] Status: {res.status_code}")
         except Exception as e:
             print(f"텔레그램 발송 오류: {e}")
-    else:
-        print(
-            "⚠️ TELEGRAM_TOKEN 또는 CHAT_ID가 설정되지 않아 발송을 스킵합니다."
-        )
 
 
 def load_state():
@@ -187,34 +182,23 @@ def check_vix_alert(current_vix, state):
 
 
 # ==========================================
-# 5. 개별 종목 기준 국면 판정 로직
+# 5. 개별 종목 기준 국면 판정 로직 (조건 개수 기반)
 # ==========================================
 def get_individual_regime(is_above, is_upward, fg_score, vix_score):
-    ma20_cond = is_above and is_upward
+    cond_ma20 = is_above and is_upward
+    cond_fg = (fg_score >= 50) if fg_score is not None else False
+    cond_vix = (vix_score <= 20) if vix_score is not None else False
 
-    # 거시 지표 하락장 신호 또는 해당 종목이 20일선 밑이면 하락장(BEAR)
-    if (
-        (not ma20_cond)
-        or (fg_score is not None and fg_score <= 40)
-        or (vix_score is not None and vix_score >= 20)
-    ):
-        return "BEAR"
+    score = int(cond_ma20) + int(cond_fg) + int(cond_vix)
 
-    # 상승장 (20일선 조건 + 공탐 60 이상 + VIX 17 이하)
-    cond_fg_bull = (fg_score >= 60) if fg_score is not None else False
-    cond_vix_bull = (vix_score <= 17) if vix_score is not None else False
-    if ma20_cond and cond_fg_bull and cond_vix_bull:
-        return "BULL"
-
-    # 횡보장 (3가지 조건 중 2가지 이상 충족)
-    cond_fg_range = (fg_score >= 50) if fg_score is not None else False
-    cond_vix_range = (vix_score <= 20) if vix_score is not None else False
-
-    score = int(ma20_cond) + int(cond_fg_range) + int(cond_vix_range)
-    if score >= 2:
+    if score == 3:
+        if (fg_score and fg_score >= 60) and (vix_score and vix_score <= 17):
+            return "BULL"
         return "RANGE"
-
-    return "BEAR"
+    elif score >= 2:
+        return "RANGE"
+    else:
+        return "BEAR"
 
 
 # ==========================================
@@ -286,7 +270,6 @@ def process_rsi_rule(
 
 def check_all_asset_rsi_alerts(fg_score, vix_score, state):
     for ticker in TARGET_ASSETS:
-        # 개별 종목의 20일선 상태 판정
         is_above, is_upward = check_individual_ma20_status(ticker)
         regime = get_individual_regime(
             is_above, is_upward, fg_score, vix_score
@@ -296,11 +279,9 @@ def check_all_asset_rsi_alerts(fg_score, vix_score, state):
             f"[{ticker}] 20일선 위: {is_above}, 우상향: {is_upward} -> 국면: {regime}"
         )
 
-        # 개별 종목이 하락장(BEAR) 판정이면 해당 종목 알림만 스킵
         if regime == "BEAR":
             continue
 
-        # 해당 종목이 상승장일 때: 알람1 (15분봉) 가동
         if regime == "BULL":
             state = process_rsi_rule(
                 ticker,
@@ -313,7 +294,6 @@ def check_all_asset_rsi_alerts(fg_score, vix_score, state):
                 state=state,
             )
 
-        # 해당 종목이 횡보장일 때: 알람2 (30분봉) 및 알람3 (60분봉) 가동
         elif regime == "RANGE":
             state = process_rsi_rule(
                 ticker,
@@ -346,20 +326,15 @@ def run_trading_system():
     print("=== 매매 및 개별 자산 점검 시작 ===")
     state = load_state()
 
-    # 1. 거시 지표 데이터 수집
     current_fg = get_fear_and_greed()
     current_vix = get_vix_index()
 
     print(f"[거시 지표] 공탐지수: {current_fg}pt | VIX: {current_vix}")
 
-    # 2. 공탐지수 / VIX 마디가 전용 알림
     state = check_fear_and_greed_alert(current_fg, state)
     state = check_vix_alert(current_vix, state)
-
-    # 3. 개별 자산별 20일선 감시 및 RSI 알림 검사
     state = check_all_asset_rsi_alerts(current_fg, current_vix, state)
 
-    # 상태 저장
     save_state(state)
 
 
@@ -369,10 +344,9 @@ def run_trading_system():
 if __name__ == "__main__":
     print("=== 알림 봇 가동 시작 ===")
 
-    # 서버 부팅 안정화를 위해 3초 대기 후 시작 알림 발송
     time.sleep(3)
     send_telegram_msg(
-        "🚀 [알림 봇 재가동 완료]\n개별 종목 20일선 감시 모드로 보완 적용되었습니다."
+        "🚀 [알림 봇 재가동 완료]\n조건 개수 기반(2개 이상 횡보장) 로직이 적용되었습니다."
     )
 
     while True:
@@ -381,5 +355,4 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"메인 루프 에러: {e}")
 
-        # 야후 파이낸스 API 차단 방지를 위해 15분 대기
         time.sleep(900)
