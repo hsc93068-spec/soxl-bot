@@ -105,7 +105,7 @@ def get_vix_index():
 def check_ma20_status(symbol="QQQ"):
     """QQQ 일봉 기준 20일선 위에 있고 20일선이 우상향하는지 확인"""
     try:
-        df = yf.Ticker(symbol).history(period="3m", interval="1d")
+        df = yf.Ticker(symbol).history(period="3mo", interval="1d")
         if df.empty or len(df) < 20:
             return False, False
         df["MA20"] = df["Close"].rolling(20).mean()
