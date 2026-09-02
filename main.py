@@ -73,7 +73,6 @@ def get_vix_index():
         return None
 
 def check_individual_ma20_status(symbol):
-    """해당 종목이 일봉 기준 20일선 위에 있고 20일선이 우상향하는지 개별 확인"""
     try:
         df = yf.Ticker(symbol).history(period="3mo", interval="1d")
         if df.empty or len(df) < 20:
@@ -306,9 +305,10 @@ def run_trading_system():
 # ==========================================
 # 6. 백그라운드 자동 가동 스레드
 # ==========================================
+bot_thread_started = False
+
 def start_bot_loop():
     print("=== 알림 봇 백그라운드 가동 시작 ===")
-    time.sleep(2)
     send_telegram_msg(
         "🚀 [알림 봇 재가동 완료]\n조건 개수 기반(2개 이상 횡보장) 로직이 적용되었습니다."
     )
@@ -321,8 +321,11 @@ def start_bot_loop():
 
         time.sleep(900)
 
-# 백그라운드 스레드 강제 즉시 실행 (Render/Gunicorn 환경 호환)
-Thread(target=start_bot_loop, daemon=True).start()
+def ensure_bot_running():
+    global bot_thread_started
+    if not bot_thread_started:
+        bot_thread_started = True
+        Thread(target=start_bot_loop, daemon=True).start()
 
 # ==========================================
 # 7. Render 웹서버 엔드포인트
@@ -331,7 +334,11 @@ app = Flask("")
 
 @app.route("/")
 def home():
+    ensure_bot_running()
     return "Bot is alive!"
+
+# 서버 가동 시점 1차 시도
+ensure_bot_running()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
