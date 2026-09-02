@@ -14,7 +14,7 @@ os.environ["PYTHONUNBUFFERED"] = "1"
 # ==========================================
 STATE_FILE = "trading_bot_state.json"
 
-TELEGRAM_TOKEN = "8986570820:AAFfJht2Y02m21_T7SOvSfss0nPozDPTSpg"
+TELEGRAM_TOKEN = "8986570820:AAFfJht2Y02m21_T7SOvSfssOnPozDPTSpg"
 CHAT_ID = "1157818555"
 
 TARGET_ASSETS = ["QQQ", "SOXX", "DIA", "VOO", "BTC-USD"]
