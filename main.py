@@ -14,7 +14,7 @@ os.environ["PYTHONUNBUFFERED"] = "1"
 # ==========================================
 STATE_FILE = "trading_bot_state.json"
 
-TELEGRAM_TOKEN = "8986570820:AAFfJht2Y02m21_T7SOvSfss0nPozDPTSpg"
+TELEGRAM_TOKEN = "8986570820:AAG_vdH9n27dDcxY3W7JkDrmCHgpAxiP3RQ"
 CHAT_ID = "1157818555"
 
 # 대상 종목: 비트코인, VOO (2가지)
