@@ -12,7 +12,7 @@ os.environ["PYTHONUNBUFFERED"] = "1"
 # ==========================================
 # 1. 기본 설정 및 텔레그램 발송 함수
 # ==========================================
-STATE_FILE = "trading_bot_state.json"
+STATE_FILE = "trading_bot_state.json" 
 
 
 TELEGRAM_TOKEN = "8986570820:AAFfJht2Y02m21_T7SOvSfssOnPozDPTSpg"
