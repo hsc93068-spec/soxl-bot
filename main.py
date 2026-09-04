@@ -17,26 +17,32 @@ STATE_FILE = "trading_bot_state.json"
 TELEGRAM_TOKEN = "8986570820:AAG_vdH9n27dDcxY3W7JkDrmCHgpAxiP3RQ"
 CHAT_ID = "1157818555"
 
-# 대상 종목: 비트코인, VOO (2가지)
-TARGET_ASSETS = ["BTC-USD", "VOO"]
+# 대상 종목: 비트코인, VOO, QQQ, SOXX, DIA (총 5개 종목)
+TARGET_ASSETS = ["BTC-USD", "VOO", "QQQ", "SOXX", "DIA"]
 
 def send_telegram_msg(message):
     print(f"[텔레그램 발송 시도]\n{message}\n", flush=True)
     if TELEGRAM_TOKEN and CHAT_ID:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        
+        # 1차 시도: Markdown 파싱 포함 발송
+        payload = {
+            "chat_id": CHAT_ID,
+            "text": message,
+            "parse_mode": "Markdown"
+        }
         try:
-            res = requests.post(
-                url, 
-                data={
-                    "chat_id": CHAT_ID, 
-                    "text": message,
-                    "parse_mode": "Markdown"
-                }, 
-                timeout=10
-            )
-            print(f"[텔레그램 응답] Status: {res.status_code} | Response: {res.text}", flush=True)
+            res = requests.post(url, data=payload, timeout=10)
+            if res.status_code == 200:
+                print(f"[텔레그램 발송 성공] Status: {res.status_code}", flush=True)
+            else:
+                print(f"[텔레그램 1차 실패] Status: {res.status_code} | Res: {res.text}", flush=True)
+                # Markdown 문법 에러 가능성이 있으므로 parse_mode를 제거하고 재시도
+                payload.pop("parse_mode", None)
+                res_retry = requests.post(url, data=payload, timeout=10)
+                print(f"[텔레그램 재시도 결과] Status: {res_retry.status_code} | Res: {res_retry.text}", flush=True)
         except Exception as e:
-            print(f"텔레그램 발송 오류: {e}", flush=True)
+            print(f"텔레그램 발송 예외 오류: {e}", flush=True)
 
 def load_state():
     default_state = {
@@ -278,7 +284,7 @@ def run_trading_system():
 # 6. 실시간 감시 루프
 # ==========================================
 def worker_loop():
-    send_telegram_msg("🚀 *[실시간 감시 모드 정상 작동 중]*\n비트코인, VOO 감시를 시작합니다.")
+    send_telegram_msg("🚀 *[실시간 감시 모드 정상 작동 중]*\nBTC-USD, VOO, QQQ, SOXX, DIA 감시를 시작합니다.")
     
     while True:
         try:
