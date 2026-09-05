@@ -12,7 +12,7 @@ os.environ["PYTHONUNBUFFERED"] = "1"
 # 1. 기본 설정 및 텔레그램 발송 함수
 # ==========================================
 STATE_FILE = "trading_bot_state.json"
-TELEGRAM_TOKEN = "8986570820:AAFfJht2Y02m21_T7SOvSfss0nPozDPTSpg"
+TELEGRAM_TOKEN = "8986570820:AAG_vdH9n27dDcxY3W7JkDrmCHgpAxiP3RQ"
 CHAT_ID = "1157818555"
 
 TARGET_ASSETS = ["BTC-USD", "VOO", "QQQ", "SOXX", "DIA"]
