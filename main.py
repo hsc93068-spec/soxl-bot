@@ -26,7 +26,6 @@ def send_telegram_msg(message):
     if TELEGRAM_TOKEN and CHAT_ID:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
-        # 1차 시도: Markdown 파싱 포함 발송
         payload = {
             "chat_id": CHAT_ID,
             "text": message,
@@ -45,7 +44,6 @@ def send_telegram_msg(message):
                     f" {res.text}",
                     flush=True,
                 )
-                # Markdown 문법 에러 가능성이 있으므로 parse_mode를 제거하고 재시도
                 payload.pop("parse_mode", None)
                 res_retry = requests.post(url, data=payload, timeout=10)
                 print(
@@ -127,9 +125,7 @@ def check_fear_and_greed_alert(current_fg, state):
     last_fg = state.get("last_fg_score")
     last_time = state.get("last_fg_time", 0)
 
-    # 3시간(10,800초) 지났는지 체크
     if (now - last_time) >= 10800:
-        # 최초 발송이거나 최근 보낸 점수와 5pt 이상 차이나는 경우 알람
         if last_fg is None or abs(current_fg - last_fg) >= 5:
             msg = (
                 "📊 *[공포&탐욕 지수 알림]*\n• 현재 공탐지수:"
@@ -150,9 +146,7 @@ def check_vix_alert(current_vix, state):
     last_vix = state.get("last_vix_level")
     last_time = state.get("last_vix_time", 0)
 
-    # 3시간(10,800초) 지났는지 체크
     if (now - last_time) >= 10800:
-        # 최초 발송이거나 최근 보낸 점수와 2pt 초과 차이나는 경우 알람 (2pt 내외이면 안 보냄)
         if last_vix is None or abs(current_vix - last_vix) > 2.0:
             msg = (
                 "📉 *[VIX 변동성 지수 알림]*\n• 현재 VIX:"
@@ -169,7 +163,6 @@ def check_vix_alert(current_vix, state):
 # 4. 하락장 판정 로직
 # ==========================================
 def is_bear_market(fg_score, vix_score):
-    # 하락장 조건: 공탐지수 <= 40 이고 VIX >= 20 (2가지 조건 모두 충족 시)
     if fg_score is not None and vix_score is not None:
         if fg_score <= 40 and vix_score >= 20.0:
             return True
@@ -202,6 +195,13 @@ def process_rsi_rule(
         if df.empty or len(df) < 20:
             return state
 
+        now = time.time()
+        last_candle_time = df.index[-1].timestamp()
+
+        # [휴장/주말 예외 처리] 마지막 봉의 생성 시각이 현재 시각 기준 2시간(7,200초) 이상 지났다면 스킵
+        if (now - last_candle_time) > 7200:
+            return state
+
         df["RSI"] = calculate_rsi(df["Close"])
         current_rsi = round(df["RSI"].iloc[-1], 2)
         current_price = round(df["Close"].iloc[-1], 2)
@@ -213,7 +213,7 @@ def process_rsi_rule(
         if recent_rsi_min <= threshold_rsi:
             bounce = current_rsi - recent_rsi_min
 
-            # 조건 2: 최저점 대비 지정 bounce_pt 이상 반등 및 noise_limit 미만 과도한 반등(노이즈) 제외
+            # 조건 2: 최저점 대비 지정 bounce_pt 이상 반등 및 noise_limit 미만
             if bounce >= bounce_pt and bounce < noise_limit:
                 history_key = f"{ticker_symbol}_{interval_name}"
                 history = state["rsi_history"].get(history_key, {})
@@ -222,14 +222,13 @@ def process_rsi_rule(
                 last_min_rsi = history.get("min_rsi", -999)
                 last_rsi = history.get("current_rsi", -999)
 
-                now = time.time()
                 time_passed = (now - last_alert_time) / 60  # 분 단위
 
-                # [중복 방지 수정] RSI 최저점과 현재 RSI 수치가 이전 발송건과 완전히 동일하면 시간 무관 차단
+                # [중복 방지] RSI 최저점과 현재 RSI 수치가 이전 발송건과 완벽히 동일하면 차단
                 if recent_rsi_min == last_min_rsi and current_rsi == last_rsi:
                     return state
 
-                # 조건 3: 최근 60분 이내 발송건 중 최저점 차이가 dup_limit 이내이면 알람 제외
+                # 조건 3: 최근 60분 이내 발송건 중 최저점 차이가 dup_limit 이내이면 스킵
                 if last_alert_time > 0 and time_passed <= 60:
                     if abs(recent_rsi_min - last_min_rsi) <= dup_limit:
                         return state
@@ -248,7 +247,6 @@ def process_rsi_rule(
 
                 send_telegram_msg(msg)
 
-                # 현재 RSI 수치를 상태에 함께 저장
                 state["rsi_history"][history_key] = {
                     "time": now,
                     "min_rsi": recent_rsi_min,
@@ -264,7 +262,6 @@ def process_rsi_rule(
 
 
 def check_all_asset_rsi_alerts(fg_score, vix_score, state):
-    # 하락장(공탐지수 <= 40 AND VIX >= 20) 조건 충족 시 알람 1, 2, 3 모두 안 보냄
     if is_bear_market(fg_score, vix_score):
         print(
             "⛔ 하락장 조건 충족 (공탐<=40 & VIX>=20) -> RSI 알람 발송 중단",
@@ -273,7 +270,6 @@ def check_all_asset_rsi_alerts(fg_score, vix_score, state):
         return state
 
     for ticker in TARGET_ASSETS:
-        # 알람1 (15분봉): RSI <= 30, 반등 >= 4pt, 60분내 최저점차 2pt 이내 차단
         state = process_rsi_rule(
             ticker,
             "15분봉",
@@ -285,7 +281,6 @@ def check_all_asset_rsi_alerts(fg_score, vix_score, state):
             state=state,
         )
 
-        # 알람2 (30분봉): RSI <= 33, 반등 >= 3pt, 60분내 최저점차 1pt 이내 차단
         state = process_rsi_rule(
             ticker,
             "30분봉",
@@ -297,7 +292,6 @@ def check_all_asset_rsi_alerts(fg_score, vix_score, state):
             state=state,
         )
 
-        # 알람3 (60분봉): RSI <= 36, 반등 >= 2pt, 60분내 최저점차 0.5pt 이내 차단
         state = process_rsi_rule(
             ticker,
             "60분봉",
@@ -309,7 +303,7 @@ def check_all_asset_rsi_alerts(fg_score, vix_score, state):
             state=state,
         )
 
-        time.sleep(1)  # 야후 API 과부하 방지 간격
+        time.sleep(1)
 
     return state
 
@@ -321,11 +315,9 @@ def run_trading_system():
     current_fg = get_fear_and_greed()
     current_vix = get_vix_index()
 
-    # 알람 4 점검
     state = check_fear_and_greed_alert(current_fg, state)
     state = check_vix_alert(current_vix, state)
 
-    # 알람 1, 2, 3 점검
     state = check_all_asset_rsi_alerts(current_fg, current_vix, state)
 
     save_state(state)
@@ -346,7 +338,6 @@ def worker_loop():
         except Exception as e:
             print(f"메인 루프 에러: {e}", flush=True)
 
-        # 2분(120초) 간격 반복
         time.sleep(120)
 
 
