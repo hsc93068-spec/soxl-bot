@@ -1,10 +1,10 @@
+import json
 import os
 import time
-import json
+from threading import Thread
+from flask import Flask
 import requests
 import yfinance as yf
-from flask import Flask
-from threading import Thread
 
 # 콘솔 출력 버퍼링 해제 (Render 로그 즉시 출력)
 os.environ["PYTHONUNBUFFERED"] = "1"
@@ -17,32 +17,32 @@ STATE_FILE = "trading_bot_state.json"
 TELEGRAM_TOKEN = "8986570820:AAG_vdH9n27dDcxY3W7JkDrmCHgpAxiP3RQ"
 CHAT_ID = "1157818555"
 
-# 대상 종목: 비트코인, VOO, QQQ, SOXX, DIA (총 5개 종목)
-TARGET_ASSETS = ["BTC-USD", "VOO", "QQQ", "SOXX", "DIA"]
+# 대상 종목: 비트코인, VOO (2가지)
+TARGET_ASSETS = ["BTC-USD", "VOO"]
+
 
 def send_telegram_msg(message):
     print(f"[텔레그램 발송 시도]\n{message}\n", flush=True)
     if TELEGRAM_TOKEN and CHAT_ID:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        
-        # 1차 시도: Markdown 파싱 포함 발송
-        payload = {
-            "chat_id": CHAT_ID,
-            "text": message,
-            "parse_mode": "Markdown"
-        }
         try:
-            res = requests.post(url, data=payload, timeout=10)
-            if res.status_code == 200:
-                print(f"[텔레그램 발송 성공] Status: {res.status_code}", flush=True)
-            else:
-                print(f"[텔레그램 1차 실패] Status: {res.status_code} | Res: {res.text}", flush=True)
-                # Markdown 문법 에러 가능성이 있으므로 parse_mode를 제거하고 재시도
-                payload.pop("parse_mode", None)
-                res_retry = requests.post(url, data=payload, timeout=10)
-                print(f"[텔레그램 재시도 결과] Status: {res_retry.status_code} | Res: {res_retry.text}", flush=True)
+            res = requests.post(
+                url,
+                data={
+                    "chat_id": CHAT_ID,
+                    "text": message,
+                    "parse_mode": "Markdown",
+                },
+                timeout=10,
+            )
+            print(
+                f"[텔레그램 응답] Status: {res.status_code} | Response:"
+                f" {res.text}",
+                flush=True,
+            )
         except Exception as e:
-            print(f"텔레그램 발송 예외 오류: {e}", flush=True)
+            print(f"텔레그램 발송 오류: {e}", flush=True)
+
 
 def load_state():
     default_state = {
@@ -60,6 +60,7 @@ def load_state():
             return default_state
     return default_state
 
+
 def save_state(state):
     try:
         with open(STATE_FILE, "w") as f:
@@ -67,15 +68,19 @@ def save_state(state):
     except Exception as e:
         print(f"상태 저장 오류: {e}", flush=True)
 
+
 # ==========================================
 # 2. 데이터 수집
 # ==========================================
 def get_fear_and_greed():
     url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
         "Accept": "application/json, text/plain, */*",
-        "Referer": "https://www.cnn.com/markets/fear-and-greed"
+        "Referer": "https://www.cnn.com/markets/fear-and-greed",
     }
     try:
         res = requests.get(url, headers=headers, timeout=10)
@@ -86,6 +91,7 @@ def get_fear_and_greed():
     except Exception:
         return 50
 
+
 def get_vix_index():
     try:
         ticker = yf.Ticker("^VIX")
@@ -95,6 +101,7 @@ def get_vix_index():
         return round(vix["Close"].iloc[-1], 2)
     except Exception:
         return 18.0
+
 
 # ==========================================
 # 3. 알람4: 공탐지수 & VIX (3시간 주기 및 변동폭 검사)
@@ -111,12 +118,16 @@ def check_fear_and_greed_alert(current_fg, state):
     if (now - last_time) >= 10800:
         # 최초 발송이거나 최근 보낸 점수와 5pt 이상 차이나는 경우 알람
         if last_fg is None or abs(current_fg - last_fg) >= 5:
-            msg = f"📊 *[공포&탐욕 지수 알림]*\n• 현재 공탐지수: *{current_fg}pt*"
+            msg = (
+                "📊 *[공포&탐욕 지수 알림]*\n• 현재 공탐지수:"
+                f" *{current_fg}pt*"
+            )
             send_telegram_msg(msg)
             state["last_fg_score"] = current_fg
             state["last_fg_time"] = now
 
     return state
+
 
 def check_vix_alert(current_vix, state):
     if current_vix is None:
@@ -130,12 +141,16 @@ def check_vix_alert(current_vix, state):
     if (now - last_time) >= 10800:
         # 최초 발송이거나 최근 보낸 점수와 2pt 초과 차이나는 경우 알람 (2pt 내외이면 안 보냄)
         if last_vix is None or abs(current_vix - last_vix) > 2.0:
-            msg = f"📉 *[VIX 변동성 지수 알림]*\n• 현재 VIX: *{current_vix:.2f}pt*"
+            msg = (
+                "📉 *[VIX 변동성 지수 알림]*\n• 현재 VIX:"
+                f" *{current_vix:.2f}pt*"
+            )
             send_telegram_msg(msg)
             state["last_vix_level"] = current_vix
             state["last_vix_time"] = now
 
     return state
+
 
 # ==========================================
 # 4. 하락장 판정 로직
@@ -147,6 +162,7 @@ def is_bear_market(fg_score, vix_score):
             return True
     return False
 
+
 # ==========================================
 # 5. 실시간 RSI 반등 알림 계산 및 필터링
 # ==========================================
@@ -156,6 +172,7 @@ def calculate_rsi(series, period=14):
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
     rs = gain / loss
     return 100 - (100 / (1 + rs))
+
 
 def process_rsi_rule(
     ticker_symbol,
@@ -177,22 +194,27 @@ def process_rsi_rule(
         current_price = round(df["Close"].iloc[-1], 2)
 
         # 최근 10개 봉 중 최저 RSI
-        recent_rsi_min = df["RSI"].tail(10).min()
+        recent_rsi_min = round(df["RSI"].tail(10).min(), 2)
 
         # 조건 1: RSI 가 기준값 이하로 진입했었는지 확인
         if recent_rsi_min <= threshold_rsi:
             bounce = current_rsi - recent_rsi_min
 
-            # 조건 2: 최저점 대비 지정 bounce_pt 이상 반등 및 10pt 이상 과도한 반등(노이즈) 제외
+            # 조건 2: 최저점 대비 지정 bounce_pt 이상 반등 및 noise_limit 미만과도한 반등(노이즈) 제외
             if bounce >= bounce_pt and bounce < noise_limit:
                 history_key = f"{ticker_symbol}_{interval_name}"
                 history = state["rsi_history"].get(history_key, {})
 
                 last_alert_time = history.get("time", 0)
                 last_min_rsi = history.get("min_rsi", -999)
+                last_rsi = history.get("current_rsi", -999)
 
                 now = time.time()
                 time_passed = (now - last_alert_time) / 60  # 분 단위
+
+                # [버그 수정 1] 장 마감/횡보로 RSI와 최저점이 이전 발송값과 완벽히 동일하면 시간 상관없이 중복 차단
+                if recent_rsi_min == last_min_rsi and current_rsi == last_rsi:
+                    return state
 
                 # 조건 3: 최근 60분 이내 발송건 중 최저점 차이가 dup_limit 이내이면 알람 제외
                 if last_alert_time > 0 and time_passed <= 60:
@@ -200,27 +222,41 @@ def process_rsi_rule(
                         return state
 
                 # 조건 만족 시 알림 발송
-                msg = f"🔔 *[{ticker_symbol} RSI 실시간 반등 알림 ({interval_name})]*\n"
+                msg = (
+                    f"🔔 *[{ticker_symbol} RSI 실시간 반등 알림"
+                    f" ({interval_name})]*\n"
+                )
                 msg += f"• 현재가: *${current_price:,}*\n"
                 msg += f"• 실시간 RSI: *{current_rsi}pt*\n"
-                msg += f"• 구간 최저 RSI: *{round(recent_rsi_min, 2)}pt* (반등: *+{round(bounce, 2)}pt*)"
+                msg += (
+                    f"• 구간 최저 RSI: *{recent_rsi_min}pt* (반등:"
+                    f" *+{round(bounce, 2)}pt*)"
+                )
 
                 send_telegram_msg(msg)
 
+                # [버그 수정 2] 현재 RSI 수치 함께 저장
                 state["rsi_history"][history_key] = {
                     "time": now,
                     "min_rsi": recent_rsi_min,
+                    "current_rsi": current_rsi,
                 }
 
     except Exception as e:
-        print(f"[{ticker_symbol}] {interval_name} RSI 계산 오류: {e}", flush=True)
+        print(
+            f"[{ticker_symbol}] {interval_name} RSI 계산 오류: {e}", flush=True
+        )
 
     return state
+
 
 def check_all_asset_rsi_alerts(fg_score, vix_score, state):
     # 하락장(공탐지수 <= 40 AND VIX >= 20) 조건 충족 시 알람 1, 2, 3 모두 안 보냄
     if is_bear_market(fg_score, vix_score):
-        print("⛔ 하락장 조건 충족 (공탐<=40 & VIX>=20) -> RSI 알람 발송 중단", flush=True)
+        print(
+            "⛔ 하락장 조건 충족 (공탐<=40 & VIX>=20) -> RSI 알람 발송 중단",
+            flush=True,
+        )
         return state
 
     for ticker in TARGET_ASSETS:
@@ -260,9 +296,10 @@ def check_all_asset_rsi_alerts(fg_score, vix_score, state):
             state=state,
         )
 
-        time.sleep(1) # 야후 API 과부하 방지 간격
+        time.sleep(1)  # 야후 API 과부하 방지 간격
 
     return state
+
 
 def run_trading_system():
     print("=== [실시간 감시] 시세 및 지표 점검 중 ===", flush=True)
@@ -280,20 +317,24 @@ def run_trading_system():
 
     save_state(state)
 
+
 # ==========================================
 # 6. 실시간 감시 루프
 # ==========================================
 def worker_loop():
-    send_telegram_msg("🚀 *[실시간 감시 모드 정상 작동 중]*\nBTC-USD, VOO, QQQ, SOXX, DIA 감시를 시작합니다.")
-    
+    send_telegram_msg(
+        "🚀 *[실시간 감시 모드 정상 작동 중]*\n비트코인, VOO 감시를 시작합니다."
+    )
+
     while True:
         try:
             run_trading_system()
         except Exception as e:
             print(f"메인 루프 에러: {e}", flush=True)
-        
+
         # 2분(120초) 간격 반복
         time.sleep(120)
+
 
 t = Thread(target=worker_loop)
 t.daemon = True
@@ -304,9 +345,11 @@ t.start()
 # ==========================================
 app = Flask(__name__)
 
+
 @app.route("/")
 def home():
     return "Bot is running real-time!"
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
