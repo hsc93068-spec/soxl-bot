@@ -38,12 +38,23 @@ def send_telegram_msg(message):
             print(f"텔레그램 발송 예외 오류: {e}", flush=True)
 
 
+# [수정된 핵심 로직] 트레이딩뷰와 동일한 와일더 평활법(Wilder's Smoothing) RSI 계산
 def calculate_rsi(series, period=14):
     delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+
+    # 트레이딩뷰의 RMA(Wilder's Smoothing) 방식 적용
+    avg_gain = gain.ewm(
+        alpha=1 / period, min_periods=period, adjust=False
+    ).mean()
+    avg_loss = loss.ewm(
+        alpha=1 / period, min_periods=period, adjust=False
+    ).mean()
+
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
 
 
 # ==========================================
@@ -88,7 +99,8 @@ def get_all_assets_rsi_info(timeframe):
     results = []
     for ticker in TARGET_ASSETS:
         try:
-            df = yf.Ticker(ticker).history(period="5d", interval=timeframe)
+            # Wilder RSI의 충분한 지표 계산을 위해 14일 치 데이터를 수집
+            df = yf.Ticker(ticker).history(period="14d", interval=timeframe)
             if not df.empty and len(df) >= 20:
                 df["RSI"] = calculate_rsi(df["Close"])
                 current_rsi = round(df["RSI"].iloc[-1], 2)
@@ -106,10 +118,16 @@ def get_all_assets_rsi_info(timeframe):
 
 def get_single_asset_detail(ticker_symbol):
     try:
-        df_15m = yf.Ticker(ticker_symbol).history(period="5d", interval="15m")
-        df_30m = yf.Ticker(ticker_symbol).history(period="5d", interval="30m")
-        df_60m = yf.Ticker(ticker_symbol).history(period="5d", interval="60m")
-        df_1d = yf.Ticker(ticker_symbol).history(period="1mo", interval="1d")
+        df_15m = yf.Ticker(ticker_symbol).history(
+            period="14d", interval="15m"
+        )
+        df_30m = yf.Ticker(ticker_symbol).history(
+            period="14d", interval="30m"
+        )
+        df_60m = yf.Ticker(ticker_symbol).history(
+            period="14d", interval="60m"
+        )
+        df_1d = yf.Ticker(ticker_symbol).history(period="3mo", interval="1d")
 
         if df_30m.empty:
             return f"❌ *{ticker_symbol}* 데이터를 불러올 수 없습니다."
@@ -190,7 +208,6 @@ def telegram_listener_loop():
                     if text and user_chat_id == CHAT_ID:
                         text_lower = text.lower()
 
-                        # 1. 도움말
                         if (
                             "도움말" in text
                             or "메뉴" in text
@@ -198,7 +215,6 @@ def telegram_listener_loop():
                         ):
                             send_telegram_msg(get_help_message())
 
-                        # 2. 전체 요약 브리핑
                         elif (
                             "요약" in text
                             or "전체" in text
@@ -207,7 +223,6 @@ def telegram_listener_loop():
                             send_telegram_msg("⏳ *[전체 요약 브리핑 생성 중...]*")
                             send_telegram_msg(get_summary_briefing())
 
-                        # 3. 하락장 필터 상태 확인
                         elif "하락장" in text or "필터" in text:
                             fg = get_fear_and_greed()
                             vix = get_vix_index()
@@ -226,7 +241,6 @@ def telegram_listener_loop():
                                 )
                             send_telegram_msg(reply_msg)
 
-                        # 4. 일봉 RSI 조회
                         elif "일봉" in text:
                             send_telegram_msg("⏳ *[일봉 RSI 데이터 조회 중...]*")
                             rsi_info = get_all_assets_rsi_info("1d")
@@ -235,7 +249,6 @@ def telegram_listener_loop():
                             )
                             send_telegram_msg(reply_msg)
 
-                        # 5. 15분 / 30분 / 60분 RSI 조회
                         elif "15분" in text:
                             send_telegram_msg(
                                 "⏳ *[15분봉 RSI 데이터 조회 중...]*"
@@ -263,7 +276,6 @@ def telegram_listener_loop():
                                 f" RSI]*\n{get_all_assets_rsi_info('60m')}"
                             )
 
-                        # 6. 특정 단일 종목 지정 조회
                         elif (
                             "비트코인" in text
                             or "btc" in text_lower
@@ -285,7 +297,6 @@ def telegram_listener_loop():
                         elif "dia" in text_lower:
                             send_telegram_msg(get_single_asset_detail("DIA"))
 
-                        # 7. 공탐 / 빅스 단독 조회
                         elif "공탐" in text or "공포" in text:
                             fg = get_fear_and_greed()
                             send_telegram_msg(
@@ -299,7 +310,6 @@ def telegram_listener_loop():
                                 f" *{vix:.2f}pt*"
                             )
 
-                        # 8. 감시 목록 및 상태
                         elif (
                             "종목" in text
                             or "감시" in text
@@ -400,7 +410,7 @@ def process_rsi_rule(
     state,
 ):
     try:
-        df = yf.Ticker(ticker_symbol).history(period="5d", interval=timeframe)
+        df = yf.Ticker(ticker_symbol).history(period="14d", interval=timeframe)
         if df.empty or len(df) < 20:
             return state
 
@@ -525,11 +535,9 @@ def worker_loop():
         time.sleep(120)
 
 
-# 백그라운드 스레드 가동
 Thread(target=worker_loop, daemon=True).start()
 Thread(target=telegram_listener_loop, daemon=True).start()
 
-# Flask Web App
 app = Flask(__name__)
 
 
