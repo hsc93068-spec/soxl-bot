@@ -55,7 +55,28 @@ def send_telegram_msg(message):
             print(f"텔레그램 발송 예외 오류: {e}", flush=True)
 
 
-# [신규 추가] 사용자의 텔레그램 메시지를 실시간으로 수신하여 답변하는 스레드
+# [신규 함수] 실시간 전 종목 RSI 일괄 조회
+def get_all_assets_rsi_info(timeframe):
+    results = []
+    for ticker in TARGET_ASSETS:
+        try:
+            df = yf.Ticker(ticker).history(period="5d", interval=timeframe)
+            if not df.empty and len(df) >= 20:
+                df["RSI"] = calculate_rsi(df["Close"])
+                current_rsi = round(df["RSI"].iloc[-1], 2)
+                current_price = round(df["Close"].iloc[-1], 2)
+                results.append(
+                    f"• *{ticker}*: ${current_price:,} (RSI:"
+                    f" *{current_rsi}pt*)"
+                )
+            else:
+                results.append(f"• *{ticker}*: 데이터 부족")
+        except Exception:
+            results.append(f"• *{ticker}*: 조회 실패")
+    return "\n".join(results)
+
+
+# 사용자의 질문을 실시간 수신하여 정해진 답변을 전달하는 스레드
 def telegram_listener_loop():
     offset = 0
     while True:
@@ -70,9 +91,60 @@ def telegram_listener_loop():
                     text = message.get("text", "").strip()
                     user_chat_id = str(message.get("chat", {}).get("id", ""))
 
-                    # 등록된 본인 CHAT_ID의 메시지만 처리
                     if text and user_chat_id == CHAT_ID:
-                        if (
+                        # 1. 공탐지수 질문 처리
+                        if "공탐" in text or "공포" in text:
+                            fg = get_fear_and_greed()
+                            reply_msg = (
+                                "📊 *[현재 공포&탐욕 지수]*\n• 현재 점수:"
+                                f" *{fg}pt*"
+                            )
+                            send_telegram_msg(reply_msg)
+
+                        # 2. 빅스지수 질문 처리
+                        elif "빅스" in text or "vix" in text.lower():
+                            vix = get_vix_index()
+                            reply_msg = (
+                                "📉 *[현재 VIX 변동성 지수]*\n• 현재 지수:"
+                                f" *{vix:.2f}pt*"
+                            )
+                            send_telegram_msg(reply_msg)
+
+                        # 3. 15분봉 RSI 질문 처리
+                        elif "15분" in text:
+                            send_telegram_msg(
+                                "⏳ *[15분봉 RSI 데이터 조회 중...]*"
+                            )
+                            rsi_info = get_all_assets_rsi_info("15m")
+                            reply_msg = (
+                                f"📈 *[현재 각 종목별 15분봉 RSI]*\n{rsi_info}"
+                            )
+                            send_telegram_msg(reply_msg)
+
+                        # 4. 30분봉 RSI 질문 처리
+                        elif "30분" in text:
+                            send_telegram_msg(
+                                "⏳ *[30분봉 RSI 데이터 조회 중...]*"
+                            )
+                            rsi_info = get_all_assets_rsi_info("30m")
+                            reply_msg = (
+                                f"📈 *[현재 각 종목별 30분봉 RSI]*\n{rsi_info}"
+                            )
+                            send_telegram_msg(reply_msg)
+
+                        # 5. 60분봉 RSI 질문 처리
+                        elif "60분" in text or "1시간" in text:
+                            send_telegram_msg(
+                                "⏳ *[60분봉 RSI 데이터 조회 중...]*"
+                            )
+                            rsi_info = get_all_assets_rsi_info("60m")
+                            reply_msg = (
+                                f"📈 *[현재 각 종목별 60분봉 RSI]*\n{rsi_info}"
+                            )
+                            send_telegram_msg(reply_msg)
+
+                        # 6. 감시 종목 목록 질문
+                        elif (
                             "종목" in text
                             or "감시" in text
                             or text == "/list"
@@ -85,6 +157,8 @@ def telegram_listener_loop():
                                 f" 목록]*\n{asset_list_str}"
                             )
                             send_telegram_msg(reply_msg)
+
+                        # 7. 봇 상태 확인 질문
                         elif "상태" in text or text == "/status":
                             reply_msg = (
                                 "✅ *[봇 정상 작동 중]*\n실시간 시세 감시 및"
@@ -241,7 +315,7 @@ def process_rsi_rule(
         now = time.time()
         last_candle_time = df.index[-1].timestamp()
 
-        # [휴장/주말 예외 처리] 마지막 봉의 생성 시각이 현재 시각 기준 2시간(7,200초) 이상 지났다면 스킵
+        # 휴장/주말 예외 처리 (마지막 봉 시각이 2시간 초과 시 스킵)
         if (now - last_candle_time) > 7200:
             return state
 
@@ -378,12 +452,12 @@ def worker_loop():
         time.sleep(120)
 
 
-# 1) 감시 루프 스레드 실행
+# 1) 주기적 감시 루프 스레드 실행
 t_worker = Thread(target=worker_loop)
 t_worker.daemon = True
 t_worker.start()
 
-# 2) [신규] 메시지 수신 스레드 실행
+# 2) 메시지 실시간 수신 스레드 실행
 t_listener = Thread(target=telegram_listener_loop)
 t_listener.daemon = True
 t_listener.start()
