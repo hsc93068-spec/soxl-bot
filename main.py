@@ -10,7 +10,7 @@ import yfinance as yf
 os.environ["PYTHONUNBUFFERED"] = "1"
 
 # ==========================================
-# 1. 기본 설정 및 텔레그램 발송 함수
+# 1. 기본 설정 및 텔레그램 발송/수신 함수
 # ==========================================
 STATE_FILE = "trading_bot_state.json"
 
@@ -53,6 +53,49 @@ def send_telegram_msg(message):
                 )
         except Exception as e:
             print(f"텔레그램 발송 예외 오류: {e}", flush=True)
+
+
+# [신규 추가] 사용자의 텔레그램 메시지를 실시간으로 수신하여 답변하는 스레드
+def telegram_listener_loop():
+    offset = 0
+    while True:
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={offset}&timeout=30"
+            res = requests.get(url, timeout=35).json()
+
+            if res.get("ok"):
+                for result in res.get("result", []):
+                    offset = result["update_id"] + 1
+                    message = result.get("message", {})
+                    text = message.get("text", "").strip()
+                    user_chat_id = str(message.get("chat", {}).get("id", ""))
+
+                    # 등록된 본인 CHAT_ID의 메시지만 처리
+                    if text and user_chat_id == CHAT_ID:
+                        if (
+                            "종목" in text
+                            or "감시" in text
+                            or text == "/list"
+                        ):
+                            asset_list_str = "\n".join(
+                                [f"• *{asset}*" for asset in TARGET_ASSETS]
+                            )
+                            reply_msg = (
+                                "📋 *[현재 감시 중인 종목"
+                                f" 목록]*\n{asset_list_str}"
+                            )
+                            send_telegram_msg(reply_msg)
+                        elif "상태" in text or text == "/status":
+                            reply_msg = (
+                                "✅ *[봇 정상 작동 중]*\n실시간 시세 감시 및"
+                                " RSI 반등 모니터링이 활성화되어 있습니다."
+                            )
+                            send_telegram_msg(reply_msg)
+
+        except Exception as e:
+            print(f"텔레그램 수신 에러: {e}", flush=True)
+
+        time.sleep(2)
 
 
 def load_state():
@@ -206,14 +249,11 @@ def process_rsi_rule(
         current_rsi = round(df["RSI"].iloc[-1], 2)
         current_price = round(df["Close"].iloc[-1], 2)
 
-        # 최근 10개 봉 중 최저 RSI
         recent_rsi_min = round(df["RSI"].tail(10).min(), 2)
 
-        # 조건 1: RSI 가 기준값 이하로 진입했었는지 확인
         if recent_rsi_min <= threshold_rsi:
             bounce = current_rsi - recent_rsi_min
 
-            # 조건 2: 최저점 대비 지정 bounce_pt 이상 반등 및 noise_limit 미만
             if bounce >= bounce_pt and bounce < noise_limit:
                 history_key = f"{ticker_symbol}_{interval_name}"
                 history = state["rsi_history"].get(history_key, {})
@@ -222,18 +262,15 @@ def process_rsi_rule(
                 last_min_rsi = history.get("min_rsi", -999)
                 last_rsi = history.get("current_rsi", -999)
 
-                time_passed = (now - last_alert_time) / 60  # 분 단위
+                time_passed = (now - last_alert_time) / 60
 
-                # [중복 방지] RSI 최저점과 현재 RSI 수치가 이전 발송건과 완벽히 동일하면 차단
                 if recent_rsi_min == last_min_rsi and current_rsi == last_rsi:
                     return state
 
-                # 조건 3: 최근 60분 이내 발송건 중 최저점 차이가 dup_limit 이내이면 스킵
                 if last_alert_time > 0 and time_passed <= 60:
                     if abs(recent_rsi_min - last_min_rsi) <= dup_limit:
                         return state
 
-                # 조건 만족 시 알림 발송
                 msg = (
                     f"🔔 *[{ticker_symbol} RSI 실시간 반등 알림"
                     f" ({interval_name})]*\n"
@@ -324,7 +361,7 @@ def run_trading_system():
 
 
 # ==========================================
-# 6. 실시간 감시 루프
+# 6. 백그라운드 스레드 실행
 # ==========================================
 def worker_loop():
     send_telegram_msg(
@@ -341,9 +378,15 @@ def worker_loop():
         time.sleep(120)
 
 
-t = Thread(target=worker_loop)
-t.daemon = True
-t.start()
+# 1) 감시 루프 스레드 실행
+t_worker = Thread(target=worker_loop)
+t_worker.daemon = True
+t_worker.start()
+
+# 2) [신규] 메시지 수신 스레드 실행
+t_listener = Thread(target=telegram_listener_loop)
+t_listener.daemon = True
+t_listener.start()
 
 # ==========================================
 # 7. Render 바인딩용 Flask 웹서버
