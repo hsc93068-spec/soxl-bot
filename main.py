@@ -6,15 +6,13 @@ from flask import Flask
 import requests
 import yfinance as yf
 
-# 콘솔 출력 버퍼링 해제 (Render 로그 즉시 출력)
 os.environ["PYTHONUNBUFFERED"] = "1"
 
 # ==========================================
 # 1. 기본 설정 및 텔레그램 발송 함수
 # ==========================================
 STATE_FILE = "trading_bot_state.json"
-
-TELEGRAM_TOKEN = "8986570820:AAG_vdH9n27dDcxY3W7JkDrmCHgpAxiP3RQ"
+TELEGRAM_TOKEN = "8986570820:AAFfJht2Y02m21_T7SOvSfss0nPozDPTSpg"
 CHAT_ID = "1157818555"
 
 TARGET_ASSETS = ["BTC-USD", "VOO", "QQQ", "SOXX", "DIA"]
@@ -38,13 +36,12 @@ def send_telegram_msg(message):
             print(f"텔레그램 발송 예외 오류: {e}", flush=True)
 
 
-# [수정된 핵심 로직] 트레이딩뷰와 동일한 와일더 평활법(Wilder's Smoothing) RSI 계산
+# 트레이딩뷰와 동일한 Wilder's Smoothing RSI 계산
 def calculate_rsi(series, period=14):
     delta = series.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
 
-    # 트레이딩뷰의 RMA(Wilder's Smoothing) 방식 적용
     avg_gain = gain.ewm(
         alpha=1 / period, min_periods=period, adjust=False
     ).mean()
@@ -53,8 +50,7 @@ def calculate_rsi(series, period=14):
     ).mean()
 
     rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+    return 100 - (100 / (1 + rs))
 
 
 # ==========================================
@@ -99,9 +95,14 @@ def get_all_assets_rsi_info(timeframe):
     results = []
     for ticker in TARGET_ASSETS:
         try:
-            # Wilder RSI의 충분한 지표 계산을 위해 14일 치 데이터를 수집
-            df = yf.Ticker(ticker).history(period="14d", interval=timeframe)
-            if not df.empty and len(df) >= 20:
+            # prepost=True 옵션 추가 및 period='1mo'로 확장하여 워밍업 데이터 충분히 수집
+            is_crypto = ticker == "BTC-USD"
+            df = yf.Ticker(ticker).history(
+                period="1mo",
+                interval=timeframe,
+                prepost=not is_crypto,  # 암호화폐 외 주식은 프리/애프터마켓 데이터 포함
+            )
+            if not df.empty and len(df) >= 30:
                 df["RSI"] = calculate_rsi(df["Close"])
                 current_rsi = round(df["RSI"].iloc[-1], 2)
                 current_price = round(df["Close"].iloc[-1], 2)
@@ -118,16 +119,17 @@ def get_all_assets_rsi_info(timeframe):
 
 def get_single_asset_detail(ticker_symbol):
     try:
+        is_crypto = ticker_symbol == "BTC-USD"
         df_15m = yf.Ticker(ticker_symbol).history(
-            period="14d", interval="15m"
+            period="1mo", interval="15m", prepost=not is_crypto
         )
         df_30m = yf.Ticker(ticker_symbol).history(
-            period="14d", interval="30m"
+            period="1mo", interval="30m", prepost=not is_crypto
         )
         df_60m = yf.Ticker(ticker_symbol).history(
-            period="14d", interval="60m"
+            period="1mo", interval="60m", prepost=not is_crypto
         )
-        df_1d = yf.Ticker(ticker_symbol).history(period="3mo", interval="1d")
+        df_1d = yf.Ticker(ticker_symbol).history(period="6mo", interval="1d")
 
         if df_30m.empty:
             return f"❌ *{ticker_symbol}* 데이터를 불러올 수 없습니다."
@@ -410,15 +412,18 @@ def process_rsi_rule(
     state,
 ):
     try:
-        df = yf.Ticker(ticker_symbol).history(period="14d", interval=timeframe)
-        if df.empty or len(df) < 20:
+        is_crypto = ticker_symbol == "BTC-USD"
+        df = yf.Ticker(ticker_symbol).history(
+            period="1mo", interval=timeframe, prepost=not is_crypto
+        )
+        if df.empty or len(df) < 30:
             return state
 
         now = time.time()
         last_candle_time = df.index[-1].timestamp()
 
-        # 휴장/주말 예외 처리 (2시간 지난 데이터 스킵)
-        if (now - last_candle_time) > 7200:
+        # 암호화폐가 아니고 2시간 이상 거래 데이터가 멈췄으면 스킵
+        if not is_crypto and (now - last_candle_time) > 7200:
             return state
 
         df["RSI"] = calculate_rsi(df["Close"])
